@@ -31,7 +31,7 @@ Real, substantial progress — and as of `9416868`/`377f228`, all of it is commi
 |---|-----------|--------|----------|
 | M0 | Environment reproducible | 🔴 Blocked | No manifest. The `venv` kernel is **not a venv** — `%APPDATA%\jupyter\kernels\venv\kernel.json` points at global `Python313\python.exe` (3.13.9). `modelling.ipynb` adds an undeclared `xgboost` dependency. |
 | M1 | Data foundation | 🟡 In progress | EDA committed. Target semantics now *decided in code* — continuous target, `r2_score`/`mean_squared_error`, regressors throughout — but README still frames Low/Moderate/High classification. Decided, not written down. |
-| M2 | Preprocessing complete | 🟢 Done | 24/24 columns traceable to committed code, 0 NaNs and 0 infinities verified on the committed CSV, notebook runs end to end. |
+| M2 | Preprocessing complete | 🟢 Done | 24/24 columns traceable to committed code; 0 NaNs and 0 infinities verified. Re-running the notebook top to bottom in a clean kernel regenerates `preprocessed_data.csv` **byte-identical** to the committed copy — the artifact is reproducible, not merely plausible. |
 | M3 | Split & scaling | 🟡 In progress | Exists, but the order is inverted: `SelectKBest` and `StandardScaler` are fit on the full frame (cells 7–8) *before* `train_test_split` (cell 9). Split is unstratified. |
 | M4 | Baseline model | 🟢 Done | Verified on the committed CSV: tuned GB scores **MSE 0.2798 / R² 0.889**; predicting the train mean scores **MSE 2.5193 / R² 0.000** on the same split. The notebook's `las` row (MSE 2.5193, R² −0.00) *is* that naive baseline, reached by accident. |
 | M5 | Model selection | 🟢 Done | rf/gb/xgb compared and tuned; xgb best at **MSE 0.2578 / R² 0.898**. `models/` holds `model_{rf,gb,xgb}.pkl` plus `preprocessing.pkl` (fitted `SelectKBest` + `StandardScaler` + feature list). All four reloaded and re-scored — metrics reproduce exactly. |
@@ -62,6 +62,11 @@ returns identical ensemble metrics across consecutive top-to-bottom runs.
 would have shipped corrupted models. Run the notebook top to bottom before trusting any number in it.
 
 ## Verified findings this run
+
+**All three notebooks now execute top to bottom with zero errors** (`eda` 14 code cells,
+`preprocessed` 24, `modelling` 14), in a clean kernel, against the committed data. On 2026-08-23
+neither notebook ran at all. `preprocessed.ipynb` additionally reproduces its own output
+byte-for-byte, so the CSV beneath every model in `models/` is regenerable rather than hand-placed.
 
 **The metric illusion did not materialise — retire that risk.** The ceiling saturation is real
 (1524/3000 at 10.0, mean 8.882) but the model beats the naive baseline on the hard part too: on the
@@ -111,3 +116,4 @@ system" trained here is learning the generator's arithmetic, not adolescent psyc
 - 2026-08-23 — Baseline review. M0 blocked, M1–M2 in progress, M3+ not started. 8 open risks, 2 of them blocking execution. (`14f0bfc`)
 - 2026-08-27 — M2 gap closed and NaNs resolved, but only in an uncommitted working tree; M4 reached and verified genuine (R² 0.811 off the ceiling, vs 0.000 naive). Leakage confirmed present and measured harmless. New: binary flag corrupted by mean-imputation, model-save cell dumps strings, tuning cell commented out. Metric-illusion risk retired. (`36bf0f1`)
 - 2026-08-27 — Work committed (`9416868`); M2 and M5 closed. Found and fixed a `copy_X` grid entry that centred the training matrix in place and silently degraded every ensemble below it (gb 0.280→0.414, xgb 0.258→0.597) — invisible until the notebook was run in order. rf/gb/xgb serialized to `models/` with their fitted preprocessing and verified by reload. Health 🟡 → 🟢. (`377f228`)
+- 2026-08-27 — Reproduction check: all three notebooks execute top to bottom with zero errors in a clean kernel, and `preprocessed.ipynb` regenerates `preprocessed_data.csv` byte-identical to the committed copy. The same top-to-bottom check that exposed the `copy_X` bug in `modelling.ipynb` finds nothing wrong upstream. (`161eec6`)
