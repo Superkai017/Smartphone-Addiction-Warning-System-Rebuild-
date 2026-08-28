@@ -15,5 +15,6 @@ Preprocessed_Data_Path = Data_Path / "Preprocessed Data" / "preprocessed_data.cs
 
 Model_Path = Project_Root / "models"
 Seed = 42
+TEST_SIZE    = 0.2
 
 
