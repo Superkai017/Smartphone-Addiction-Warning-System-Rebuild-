@@ -1,1 +1,2 @@
-from Src import config 
+def main():
+    pass
