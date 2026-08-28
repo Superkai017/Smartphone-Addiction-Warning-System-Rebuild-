@@ -4,24 +4,38 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project state
 
-Read this first: **`README.md` describes the intended end state, not the current one.** Today the repo is
-notebook-only — two Jupyter notebooks and two CSVs. There is no `src/`, no trained model, no API, no
-frontend, no `requirements.txt`, and no tests. Do not assume any component the README lists (FastAPI,
-React/Streamlit, Docker, `.pkl` artifacts) exists until you have verified it on disk.
+Read this first: **`README.md` describes the intended end state, not the current one.** As of
+2026-08-28 the repo holds three Jupyter notebooks, a small `Src/` package, two CSVs, and four
+pickled artifacts in `models/`. There is still **no API, no frontend, no `requirements.txt`, no
+tests, and no Docker**. Do not assume any component the README lists exists until you have verified
+it on disk.
 
-Current pipeline stage: **EDA done → feature engineering partially done → scaling, split, and modeling not started.**
+Current pipeline stage: **EDA → preprocessing → modelling through tuned ensembles, with rf/gb/xgb
+serialized to `models/`. The inference API is the next unstarted milestone.**
+
+`PROJECT_STATUS.md` carries the detailed milestone table, the measured metrics, and the open-risk
+register. It is more current than this file — read it before planning work, and update it when you
+close a risk.
 
 ## Environment & commands
 
-No dependency manifest is committed. Both notebooks bind to a Jupyter kernel named `venv`
-(display name "Python (venv)") that is registered globally in `%APPDATA%\jupyter\kernels\venv`, not
-inside this repo. The system `python` on PATH (3.10.0rc2) does **not** have pandas installed — always
-run analysis through that kernel, or create a project venv first.
+No dependency manifest is committed — this is the longest-standing blocker in the project.
+
+All three notebooks bind to a Jupyter kernel named `venv` (display name "Python (venv)") registered
+globally in `%APPDATA%\jupyter\kernels\venv`. **It is not a venv**: `kernel.json` points at the
+global `…\Programs\Python\Python313\python.exe` (3.13.9, pandas 2.2.3, scikit-learn 1.6.1). The
+`python` on PATH is a different interpreter (3.10.0rc2) with no pandas, so anything run through it
+fails on import. Use the Python313 interpreter directly, or make a real project venv.
+
+`modelling.ipynb` imports `xgboost`, which no doc or manifest declares.
 
 ```bash
-# Create a project-local env (does not exist yet; do this before adding scripts)
+# Create a project-local env (still does not exist)
 python -m venv .venv && .venv/Scripts/activate
-pip install pandas numpy matplotlib seaborn scikit-learn jupyter
+pip install pandas numpy matplotlib seaborn scikit-learn xgboost joblib jupyter
+
+# Regenerate data/Preprocessed Data/preprocessed_data.csv from the raw CSV
+python -m Src.Preprocessed
 
 # Run notebooks
 jupyter lab notebook/
@@ -30,57 +44,94 @@ jupyter lab notebook/
 jupyter nbconvert --to notebook --execute --inplace notebook/preprocessed.ipynb
 ```
 
-There is no build, lint, or test command because there is nothing yet to build, lint, or test.
+There is no build, lint, or test command yet.
+
+**Run notebooks top to bottom before trusting any number in them.** Non-linear execution order
+previously hid a real defect: a `copy_X: [True, False]` entry in the Ridge/Lasso grids made
+`GridSearchCV` centre the training matrix in place while the test matrix was left alone, degrading
+every model below it (gb MSE 0.280 → 0.414, xgb 0.258 → 0.597). It was invisible because the
+ensembles had been executed *before* the search. Fixed in `377f228`.
 
 ## Data flow
 
 ```
-data/Raw Data/teen_phone_addiction_dataset.csv   3000 rows x 25 cols (Kaggle, synthetic)
-  └─ notebook/eda.ipynb            distributions, boxplots, f_regression ranking, correlation heatmap
-  └─ notebook/preprocessed.ipynb   drops ID/Name/Location, engineers ratio & composition features
-       └─ data/Preprocessed Data/preprocessed_data.csv   3000 rows x 25 cols
+data/Raw Data/teen_phone_addiction_dataset.csv    3000 x 25  (Kaggle, synthetic)
+  ├─ notebook/eda.ipynb           distributions, boxplots, f_regression ranking, heatmap
+  ├─ notebook/preprocessed.ipynb  drop IDs → label-encode Gender → zero-impute → 24 features
+  └─ Src/Preprocessed.py          the same pipeline as an importable module
+       └─ data/Preprocessed Data/preprocessed_data.csv   3000 x 28
+            └─ notebook/modelling.ipynb   SelectKBest(k=18) → scale → split → linear + ensembles
+                 └─ models/  model_{rf,gb,xgb}.pkl, preprocessing.pkl
 ```
 
-The two CSVs have the same shape by coincidence, not because columns were transformed in place.
-`preprocessed_data.csv` keeps **only `Addiction_Level` plus 24 engineered features** — every raw
-predictor (`Daily_Usage_Hours`, `Sleep_Hours`, `Phone_Checks_Per_Day`, …) was dropped. Any model
-trained on it sees derived signal only.
+`preprocessed_data.csv` keeps `Age`, `Gender`, `Daily_Usage_Hours` and the target `Addiction_Level`
+as raw columns, plus **24 engineered features**. The other 18 raw predictors (`Sleep_Hours`,
+`Phone_Checks_Per_Day`, `Time_on_*`, …) are dropped once the features derived from them exist.
 
-### Reproducibility gap
+`models/preprocessing.pkl` is a dict of `{selector, scaler, features}` — a `SelectKBest` fitted on
+27 columns and a `StandardScaler` on the surviving 18.
 
-`preprocessed.ipynb` ends after the "Usage composition" block, which creates 6 features
-(`Tracked_Hours`, `Untracked_Hours`, `Leisure_Hours`, `Leisure_Ratio`, `Education_Ratio`,
-`Social_vs_Gaming`). The committed CSV contains **18 more** — `Weekend_Escalation`, `Minutes_Per_Check`,
-`Checks_Per_App`, `Sleep_Deficit`, `Screen_To_Sleep_Ratio`, `Bedtime_Screen_Share`, `Offline_Activity`,
-`Anxiety_Level_z`, `Depression_Level_z`, `Self_Esteem_z`, `Distress_Index`, `Grade_Num`, and others.
-**The code that produced them is not in the repo.** Before extending preprocessing, either recover
-that code into the notebook or regenerate the CSV from a notebook that runs end to end.
+### Preprocessing exists twice — keep both in sync
+
+`notebook/preprocessed.ipynb` and `Src/Preprocessed.py` implement the same pipeline and produce
+identical output (verified with `assert_frame_equal` against the committed CSV). **A change to one
+must be mirrored in the other**, or the notebook and the module will silently disagree about what
+the model was trained on. The module is the better place for logic the API will need; the notebook
+retains the exploratory framing and its committed outputs.
 
 ## Modeling constraints you must account for
 
-- **Target `Addiction_Level` is continuous (1.0–10.0), not tiered.** README frames the problem as
-  classification into Low/Moderate/High; the data supports regression. Pick one and make the
-  notebooks, the README, and the eventual API agree.
-- **The target is ceiling-censored.** 1524 of 3000 rows (50.8%) sit exactly at the 10.0 maximum;
-  mean is 8.88. Plain R²/RMSE will look deceptively strong. Treat this as a censored/imbalanced
-  problem — stratify splits, and report metrics on the non-saturated range separately.
+- **Target `Addiction_Level` is continuous (1.0–10.0), not tiered.** The README frames the problem
+  as classification into Low/Moderate/High; every line of code does regression (`r2_score`,
+  `mean_squared_error`, regressors throughout). The code has effectively decided — the README and
+  the eventual API still need to be brought in line.
+- **The target is ceiling-censored.** 1524 of 3000 rows (50.8%) sit exactly at 10.0; mean is 8.88.
+  Always report metrics on the non-saturated range separately. The current models do hold up there —
+  gb scores MSE 0.470 / R² 0.811 on the 295 non-ceiling test rows, against MSE 0.280 / R² 0.889
+  overall — so this is a reporting discipline, not a known inflation. Splits are still unstratified.
 - **Component times exceed the stated total.** `Time_on_Social_Media + Time_on_Gaming +
-  Time_on_Education > Daily_Usage_Hours` in 1475 of 3000 rows, so `Untracked_Hours` goes negative
-  and `Leisure_Ratio` exceeds 1.0 in 968 rows. The "residual browsing time" reading of these
-  features does not hold. This is an artifact of the synthetic source data, not a code bug.
-- **Scaling is deliberately deferred** to after the train/test split, to avoid leakage (see commit
-  `14f0bfc`). Do not add a `.fit_transform()` over the full frame to the preprocessing notebook.
-- **25 NaNs per ratio column** (30 in `Online_To_Offline_Ratio`) remain in the committed CSV, from
-  `.replace(0, np.nan)` guards on zero denominators. They are unhandled — decide impute vs. drop
-  before training.
+  Time_on_Education > Daily_Usage_Hours` in 1475 of 3000 raw rows. After zero-imputation
+  `Untracked_Hours` is negative in **1582** rows and `Leisure_Ratio` exceeds 1.0 in **1025**. The
+  "residual browsing time" reading of these features does not hold. This is an artifact of the
+  synthetic source data, not a code bug — and both features are inside the selected k=18.
+- **Zero-imputation is the current data defect.** `Src/Preprocessed.py:impute_zeros_with_mean`
+  replaces 0 with the column mean across nine columns. This resolved the old NaN problem (the
+  committed CSV now has **0 NaNs and 0 infinities**), but it overreaches:
+  - `Parental_Control` is a genuine binary 0/1 flag with 1478 zeros (49.3%). Mean-imputation turns
+    "no parental control" into 0.5073, so `Unsupervised_Usage = Daily × (1 − PC)` is mislabelled,
+    not merely rescaled. Every artifact in `models/` inherits this.
+  - It fabricates activity for real zeros: `Exercise_Hours` 366 rows, `Social_Interactions` 257,
+    `Time_on_Education` 250. Only `Daily_Usage_Hours` (25 rows) is a case where zero is implausible.
+- **Scaling must stay behind the train/test split** to avoid leakage (see `14f0bfc`). Do not add a
+  `.fit_transform()` over the full frame to preprocessing. `modelling.ipynb` currently violates this
+  — `SelectKBest` and `StandardScaler` are fit on the full frame before `train_test_split`. Measured
+  cost is nil (0.2799 vs 0.2798 inside a train-only `Pipeline`), so fix it because the API needs one
+  fitted pipeline object anyway, not because the numbers are wrong.
+- **The psychological features carry no signal.** `f_regression` p-values: `Distress_Index` 0.13,
+  `Self_Esteem_z` 0.22, `Anxiety_Level_z` 0.38, `Depression_Level_z` 0.64, `Grade_Num` 0.75, `Age`
+  0.086, `Gender` 0.085 — `k=18` drops all of them. The synthetic target is a near-deterministic
+  function of usage and sleep. A model trained here learns the generator's arithmetic, not
+  adolescent psychology; say so rather than overclaiming in any user-facing copy.
+- **Half the inference path is not serializable as written.** `preprocessing.pkl` resumes from the
+  engineered 27-column frame. Ahead of it sit the column drops, a fitted-but-never-saved
+  `LabelEncoder` for `Gender`, the 24 feature formulas, and the zero-fill — whose means are
+  recomputed from whatever frame is loaded, so they are undefined for a single record. The API
+  cannot score a raw record until preprocessing is a fitted, serialized `Pipeline`.
 
 ## Conventions in this codebase
 
 - Notebooks are committed **with outputs**; keep it that way for review continuity.
-- Data paths are hardcoded Windows absolute strings (`r'D:\Phone addicted\...'`). **Both notebooks
-  currently point at `data\teen_phone_addiction_dataset.csv`, which no longer exists** — the file
-  moved to `data/Raw Data/` in commit `14f0bfc` and the notebooks were not updated, so cell 1 fails
-  on a fresh run. Fix these to repo-relative paths rather than patching the absolute string.
+- **New code takes paths from `Src/config.py`** (`Raw_Data_Path`, `Preprocessed_Data_Path`,
+  `Model_Path`, `Seed`, `TEST_SIZE`), which resolves them relative to the repo root. The three
+  notebooks still hardcode `r'D:\Phone addicted\…'` absolute strings — they resolve on this machine
+  and nowhere else. Migrate them to the config module rather than patching the string.
+- `preprocessed.ipynb`'s final cell writes to a **relative** `preprocessed_data.csv`, which lands in
+  `notebook/` instead of updating the tracked file. `python -m Src.Preprocessed` writes to the right
+  place; prefer it.
+- The package directory is `Src/` with a capital S, and the module is `Preprocessed.py`. Windows is
+  case-insensitive, so `src/preprocessed.py` silently resolves to the same file — match the existing
+  casing in imports (`from Src.Preprocessed import …`) so it works if the repo is ever cloned on
+  Linux.
 - Directory names contain spaces (`Raw Data`, `Preprocessed Data`) — quote them in shell commands.
 - Commit messages are lowercase, descriptive, and explain *why* (e.g. deferring scaling to avoid
   leakage). Match that style.
