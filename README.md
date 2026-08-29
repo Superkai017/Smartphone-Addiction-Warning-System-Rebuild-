@@ -62,7 +62,7 @@ The application is split into three main layers:
 * **Environment Management:** Virtualenv / Conda
 
 ### Web Frontend
-* **Core:** HTML5, CSS3, JavaScript (ES6+)
+* **Core:** HTML5, CSS3, JavaScript (ES6+), React .. 
 * **Framework / Library:** React.js / Streamlit
 * **Data Visualization:** Chart.js / Plotly
 
