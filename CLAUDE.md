@@ -34,20 +34,27 @@ fails on import. Use the Python313 interpreter directly, or make a real project 
 python -m venv .venv && .venv/Scripts/activate
 pip install pandas numpy matplotlib seaborn scikit-learn xgboost joblib jupyter
 
+# Everything runnable goes through main.py. Nothing writes without --save
+python main.py --help
+
 # Regenerate data/Preprocessed Data/preprocessed_data.csv and models/preprocessor.pkl
-python -m Src.Preprocessed
+python main.py preprocess
+python main.py preprocess --dry-run     # run the pipeline, write nothing
 
-# Train the models. Writes nothing unless --save
-python -m Src.model
-python -m Src.model --save --out models
+# Train. --save replaces preprocessing.pkl and model_*.pkl
+python main.py train
+python main.py train --save --out models
 
-# Score them. --cv adds honest 5-fold CV with selection/scaling refit per fold
-python -m Src.evaluation
-python -m Src.evaluation --cv
+# Score. --cv adds honest 5-fold CV with selection/scaling refit per fold
+python main.py evaluate
+python main.py evaluate --cv
 
-# Re-derive the hyperparameters in Src/model.py. Full grid is ~5900 fits
-python -m Src.tuning --random 40        # fast sample
-python -m Src.tuning --save             # full grid -> models/best_params.json
+# Re-derive the hyperparameters in Src/model.py. Full grid is 5945 fits, ~21 min
+python main.py tune --random 40         # fast sample
+python main.py tune --save              # full grid -> models/best_params.json (gitignored)
+
+# preprocess -> train -> evaluate in one go (tuning is deliberately excluded)
+python main.py all
 
 # Run notebooks
 jupyter lab notebook/
@@ -91,7 +98,7 @@ as raw columns, plus **24 engineered features**. The other 18 raw predictors (`S
 27 columns and a `StandardScaler` on the surviving 18.
 
 `models/preprocessor.pkl` sits *ahead* of it: `{gender_classes, zero_means, psych_stats,
-output_columns, feature_columns}`, written by `python -m Src.Preprocessed`. It is what lets a single
+output_columns, feature_columns}`, written by `python main.py preprocess`. It is what lets a single
 raw record be preprocessed identically to the training frame. Refit and re-save it whenever
 `ZERO_AS_MISSING`, `PSYCH_COLUMNS` or any feature formula changes, or new records will be engineered
 against stale statistics.
@@ -116,7 +123,7 @@ not the arithmetic, and `preprocess(raw)` still reproduces the committed CSV exa
   the eventual API still need to be brought in line.
 - **The target is ceiling-censored.** 1524 of 3000 rows (50.8%) sit exactly at 10.0; mean is 8.88.
   Always report metrics on the non-saturated range separately. The current models do hold up there —
-  gb scores MSE 0.470 / R² 0.811 on the 295 non-ceiling test rows, against MSE 0.280 / R² 0.889
+  gb scores MSE 0.435 / R² 0.825 on the 295 non-ceiling test rows, against MSE 0.268 / R² 0.894
   overall — so this is a reporting discipline, not a known inflation. Splits are still unstratified.
 - **Component times exceed the stated total.** `Time_on_Social_Media + Time_on_Gaming +
   Time_on_Education > Daily_Usage_Hours` in 1475 of 3000 raw rows. After zero-imputation
@@ -136,10 +143,12 @@ not the arithmetic, and `preprocess(raw)` still reproduces the committed CSV exa
   — `SelectKBest` and `StandardScaler` are fit on the full frame before `train_test_split`. Measured
   cost is nil (0.2799 vs 0.2798 inside a train-only `Pipeline`), so fix it because the API needs one
   fitted pipeline object anyway, not because the numbers are wrong. `Src/model.py` does it in the
-  right order (split → select → scale, both fitted on train) and reproduces the notebook's headline
-  metrics to four decimals, which is the direct confirmation that the cost is nil. The committed
-  `models/*.pkl` are still the notebook's full-frame fit; `python -m Src.model --save` replaces them
-  with the train-only ones.
+  right order (split → select → scale, both fitted on train). Configured with the notebook's
+  hyperparameters it reproduced the notebook's headline metrics to four decimals — the direct
+  confirmation that the cost is nil. It now carries the tuned values instead, so its numbers are
+  better than the notebook's rather than equal to them. The committed `models/*.pkl` are still the
+  notebook's full-frame fit at the *old* hyperparameters; `python main.py train --save` replaces
+  them.
 - **The psychological features carry no signal.** `f_regression` p-values: `Distress_Index` 0.13,
   `Self_Esteem_z` 0.22, `Anxiety_Level_z` 0.38, `Depression_Level_z` 0.64, `Grade_Num` 0.75, `Age`
   0.086, `Gender` 0.085 — `k=18` drops all of them. The synthetic target is a near-deterministic
@@ -165,13 +174,19 @@ not the arithmetic, and `preprocess(raw)` still reproduces the committed CSV exa
   `model.py` owns the data, the estimators and the artifacts; `evaluation.py` only measures fitted
   models; `tuning.py` only searches for parameters. Neither may be imported *by* `model.py` — that
   would be a cycle. Anything all three need goes in `model.py` or `config.py`.
+- **`main.py` is the only entry point.** No module under `Src/` has a `main()` or a
+  `if __name__ == "__main__"` block, and `python -m Src.<anything>` does nothing — argument parsing
+  lives in `main.py`'s subparsers and calls library functions (`build_preprocessed_dataset`,
+  `prepare`/`train_models`/`save_artifacts`, `report`, `search`). Add a new runnable step as a
+  subcommand there, not as another module `main()`. `main.py` imports the heavy modules *inside* each
+  command function, so `python main.py preprocess` still works without `xgboost` installed.
 - **New code takes paths from `Src/config.py`** (`Raw_Data_Path`, `Preprocessed_Data_Path`,
-  `Model_Path`, `Preprocessor_Path`, `Model_Artifacts_Path`, `Seed`, `TEST_SIZE`), which resolves
-  them relative to the repo root. The three
+  `Model_Path`, `Preprocessor_Path`, `Model_Artifacts_Path`, `Best_Params_Path`, `Seed`,
+  `TEST_SIZE`), which resolves them relative to the repo root. The three
   notebooks still hardcode `r'D:\Phone addicted\…'` absolute strings — they resolve on this machine
   and nowhere else. Migrate them to the config module rather than patching the string.
 - `preprocessed.ipynb`'s final cell writes to a **relative** `preprocessed_data.csv`, which lands in
-  `notebook/` instead of updating the tracked file. `python -m Src.Preprocessed` writes to the right
+  `notebook/` instead of updating the tracked file. `python main.py preprocess` writes to the right
   place; prefer it.
 - The package directory is `Src/` with a capital S, and the module is `Preprocessed.py`. Windows is
   case-insensitive, so `src/preprocessed.py` silently resolves to the same file — match the existing
