@@ -4,6 +4,7 @@ Every runnable step lives here. `Src/` holds only library code - the functions
 this file calls - so there is one place to look for "how do I run it" and one
 place to change when a step grows an option.
 
+    python main.py                         # no arguments: runs `all`
     python main.py preprocess              # raw CSV -> preprocessed CSV + preprocessor.pkl
     python main.py train --save            # fit the models, write models/
     python main.py evaluate --cv           # metrics on the held-out fold
@@ -138,6 +139,10 @@ def cmd_all(args: argparse.Namespace) -> None:
 # --------------------------------------------------------------------------- #
 # Parser
 # --------------------------------------------------------------------------- #
+# What a bare `python main.py` does. `all` is preprocess -> train -> evaluate
+# and writes nothing without --save, so it is safe to run by accident.
+DEFAULT_COMMAND = "all"
+
 TUNABLE = ["lr", "rid", "las", "rf", "gb", "xgb"]
 
 SCORING_DEFAULT = "neg_root_mean_squared_error"
@@ -149,7 +154,9 @@ def build_parser() -> argparse.ArgumentParser:
         description=(__doc__ or "").splitlines()[0],
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    # Not required: running the file with no arguments - the IDE's Run button,
+    # or a bare `python main.py` - falls through to DEFAULT_COMMAND.
+    sub = parser.add_subparsers(dest="command", required=False)
 
     def add_k(p: argparse.ArgumentParser) -> None:
         p.add_argument(
@@ -253,7 +260,15 @@ def _dependency_help(missing: str | None) -> str:
 
 
 def main(argv: list[str] | None = None) -> None:
-    args = build_parser().parse_args(argv)
+    raw = sys.argv[1:] if argv is None else list(argv)
+    if not raw:
+        # Bare `python main.py` (or the IDE Run button) does the useful thing
+        # rather than printing a usage error. `all` writes nothing on its own.
+        print(f"no command given - running '{DEFAULT_COMMAND}' "
+              f"(see `python main.py --help` for the rest)\n")
+        raw = [DEFAULT_COMMAND]
+
+    args = build_parser().parse_args(raw)
     try:
         args.func(args)
     except ModuleNotFoundError as exc:
