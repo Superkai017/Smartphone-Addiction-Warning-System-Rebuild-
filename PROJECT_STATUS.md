@@ -1,8 +1,8 @@
 # Project Status — 2026-08-28
 
-**Stage:** Preprocessing complete and now available as an importable module; modelling extended with a
-full evaluation suite and an inference prototype; three models serialized to `models/`. M6 (inference
-API) is partially scaffolded but has no service.
+**Stage:** Preprocessing complete and importable; modelling extended with a full evaluation suite;
+three models serialized to `models/`; the warning layer (band + percentile + calibrated advice) built
+and verified as `Src/inference.py`. M6 has everything except the HTTP service.
 **Head:** `42857a1` · **Since last review:** 5 commits (`beb634b..42857a1`) plus this review's own changes
 **Health:** 🟢 on track — the pipeline is reproducible from committed code in two independent
 implementations, and the leakage question that has been open since 2026-08-23 is now measured rather
@@ -38,9 +38,9 @@ than assumed.
 | M1 | Data foundation | 🟡 In progress | Target semantics now resolved *in code*: regression, then post-hoc severity bands (`classify_addiction`, cell 28). CLAUDE.md records this; README still frames it as native classification. |
 | M2 | Preprocessing complete | 🟢 Done | Two implementations, byte-identical output. Notebook regenerates the CSV exactly (`161eec6`); `Src/Preprocessed.py` verified frame-equal this review. 0 NaNs, 0 infinities. |
 | M3 | Split & scaling | 🟡 In progress | Order still inverted — `SelectKBest`/`StandardScaler` fit on the full frame (cells 7–8) before `train_test_split` (cell 9). Now measured: honest CV is *better* than the reported split, so the cost is nil. Split still unstratified. |
-| M4 | Baseline model | 🟢 Done | Re-verified 2026-08-28 by reloading the pickles and reproducing the split: rf **0.5111 / R² 0.797**, gb **0.2798 / 0.889**, xgb **0.2578 / 0.898**. After the 2026-08-29 grid search `Src/model.py` scores rf **0.5113 / 0.797**, gb **0.2675 / 0.894**, xgb **0.2478 / 0.902** — the pickles in `models/` still hold the older configuration. Mean-baseline row present in cell 19. |
+| M4 | Baseline model | 🟢 Done | Re-verified 2026-08-28 by reloading the pickles and reproducing the split: rf **0.5111 / R² 0.797**, gb **0.2798 / 0.889**, xgb **0.2578 / 0.898**. After the 2026-08-29 grid search `Src/model.py` scores rf **0.5113 / 0.797**, gb **0.2675 / 0.894**, xgb **0.2478 / 0.902**, and the pickles in `models/` now hold exactly that — reloaded and round-tripped to the same four decimals after `train --save`. Mean-baseline row present in cell 19. |
 | M5 | Model selection | 🟢 Done | xgb best. Capacity sweep (cell 20) says no simpler config wins in any family: rf depth-10 +0.021 RMSE, gb lr-0.05 +0.048. Learning curves, residual diagnostics and permutation importance all committed. `Src/tuning.py` (2026-08-29) makes the searches behind the hyperparameters re-runnable — 1189 candidates, 5945 fits, over a `Pipeline` so each fold refits selection and scaling. |
-| M6 | Inference API | 🟡 Scaffolded | **Single-record scoring now works** (2026-08-29): `Src/Preprocessed.py` splits `fit`/`transform`, persists the frame-relative statistics to `models/preprocessor.pkl`, and adds `preprocess_new()` + `to_model_matrix()`. Verified that a lone record dict reproduces its row of the committed CSV exactly, and that gb scores it to the same value by either route. Cell 28 prototypes banding and recommendations. Still no FastAPI app. |
+| M6 | Inference API | 🟡 Scaffolded | **The library behind the API is complete** (2026-08-29). `Src/Preprocessed.py` splits `fit`/`transform` and persists the frame-relative statistics; `Src/inference.py` adds the warning layer — `Scorer.load()` once at startup, `Scorer.score(record)` per request, returning `{score, band, band_description, percentile, model, n_flagged, recommendations}` as JSON-ready dicts. Every threshold is calibrated from the data into `models/thresholds.json`, not hardcoded. Exercised without a web layer via `python main.py score 7 --json`. **Still no FastAPI app** — that is now the only thing between here and M6 done. |
 | M7 | Frontend | ⚪ Not started | — |
 | M8 | Packaging | ⚪ Not started | Depends on M0. |
 
@@ -108,12 +108,12 @@ Fixed in `377f228`.
 | Risk | Impact | Cheapest fix | First seen |
 |------|--------|--------------|-----------|
 | ~~**Single-record inference still impossible.**~~ **Closed 2026-08-29.** `fit`/`transform` split in `Src/Preprocessed.py`; the gender classes, zero-fill means and affect moments now persist to `models/preprocessor.pkl` and are replayed by `preprocess_new()` | Was: M6 cannot score one teenager, which is the entire product | Done. Residual: `models/preprocessor.pkl` must be refit alongside any formula change, and it is a plain dict rather than a `Pipeline` | 2026-08-27 |
-| **Severity bands put 64% of the data in "Severe"**, 1.4% in "Normal" | The user-facing output is near-constant — the warning system rarely says anything but "severe" | Set cut points from the observed distribution, or model the ceiling explicitly (censored regression / two-stage) | 2026-08-28 |
-| **Recommendation thresholds are uncalibrated** and fired 14/14 on the demo sample | Advice is generic; every user sees nearly every tip | Derive thresholds from `df[FEATURE_ORDER].quantile([.25,.5,.75])`, cap the number of tips shown | 2026-08-28 |
+| ~~**Severity bands put 64% of the data in "Severe"**, 1.4% in "Normal"~~ **Partly closed 2026-08-29.** Cuts now come from the 1476 non-ceiling rows (`[6.7, 8.0, 9.0]`), fixing the bottom three bands: 11.3 / 11.9 / 13.8% of predictions vs 1.2 / 5.8 / 30.1% before | The top band is **still 63%** and no absolute cut point can change that — it is ceiling censoring in the source data. Mitigated, not solved: `percentile` is now returned alongside the band and separates a 37th-percentile "Severe" from a 75th | Remaining fix is upstream — censored regression or a two-stage model. Do not chase it with more thresholds | 2026-08-28 |
+| ~~**Recommendation thresholds are uncalibrated** and fired 14/14 on the demo sample~~ **Closed 2026-08-29.** Thresholds are q75/q25 of each feature, written to `models/thresholds.json` by `main.py calibrate`. Worse than "uncalibrated" on inspection: `Academic_Per_Usage < 0.2` was **dead code** (feature runs 11–29, fired 0.0%) and `Weekend_Ratio > 0.6` fired on **90.6%**. All 14 rules now fire on 23.5–25.6%; tips are ranked by cohort percentile and capped at 3 (median 3 flagged, max 9, never 14) | Was: advice generic, every user saw nearly every tip | Done. Residual: rule thresholds are feature quantiles, so they go stale on any preprocessing-formula change — recalibrate alongside `preprocessor.pkl` | 2026-08-28 |
 | **Preprocessing now exists twice** — `notebook/preprocessed.ipynb` and `Src/Preprocessed.py` | They agree today (verified). Nothing enforces that they keep agreeing, and a silent divergence means the model is trained on something other than what the API computes | A test asserting the module reproduces the committed CSV; eventually have the notebook import the module rather than restate it | 2026-08-28 |
-| ~~**Model-save cell (c29) is commented out**, as is the tuning cell (c14).~~ **Closed 2026-08-29.** `main.py train --save` is c29; `Src/tuning.py` is c12+c14, runnable on demand. Its `models/best_params.json` is gitignored, so the tracked record of the search is the constants in `Src/model.py` plus their before/after CV numbers | Was: the artifacts in `models/` had no committed code that reproduces them, and the searches behind the hyperparameters were folklore | Done. Residual: `--save` writes the train-only fit, so it does not byte-reproduce the committed pickles | 2026-08-27 |
-| `.replace(0, mean)` applied to `Parental_Control`, a **binary 0/1 flag** with 1478 zeros (49.3%) | "No parental control" becomes 0.5073, so `Unsupervised_Usage = Daily × (1 − PC)` is mislabelled, not merely rescaled. Every artifact in `models/` inherits it | Exclude `Parental_Control` from `ZERO_AS_MISSING` in `Src/Preprocessed.py` and re-run | 2026-08-27 |
-| The same replacement fabricates activity for genuine zeros: `Exercise_Hours` 366 rows (12.2%), `Social_Interactions` 257 (8.6%), `Time_on_Education` 250 (8.3%) | A teen who exercises zero hours is recorded as average. Feeds `Offline_Activity` and `Online_To_Offline_Ratio` directly | Restrict replacement to `Daily_Usage_Hours` (25 rows), where zero is genuinely implausible | 2026-08-27 |
+| ~~**Model-save cell (c29) is commented out**, as is the tuning cell (c14).~~ **Closed 2026-08-29.** `main.py train --save` is c29; `Src/tuning.py` is c12+c14, runnable on demand. Its `models/best_params.json` is gitignored, so the tracked record of the search is the constants in `Src/model.py` plus their before/after CV numbers | Was: the artifacts in `models/` had no committed code that reproduces them, and the searches behind the hyperparameters were folklore | Done, and as of 2026-08-29 `--save` has been run: the committed pickles *are* the train-only tuned fit | 2026-08-27 |
+| ~~`.replace(0, mean)` applied to `Parental_Control`, a **binary 0/1 flag** with 1478 zeros (49.3%)~~ **Closed 2026-08-29.** Excluded from `ZERO_AS_MISSING`; CSV, `preprocessor.pkl`, `preprocessing.pkl`, `model_*.pkl` and `thresholds.json` all regenerated, notebook mirrored and re-executed | **The stated impact was wrong and is corrected here.** Imputation mapped the flag to {0.5073, 1}, so `1 − PC` became {0.4927, 0} = **exactly 0.492667 × the correct {1, 0}**. A positive scalar multiple is invisible to `StandardScaler` and `f_regression`, so no model ever saw it: post-fix `evaluate` reproduces every metric to 4 dp and `SelectKBest` keeps the same 18 with an identical F of 97.572. The real damage was semantic — `Unsupervised_Usage` held 0.49 × hours, so the calibrated advice threshold was in fabricated units (2.4633 → **5.0000** real hours) | Done | 2026-08-27 |
+| The same replacement fabricates activity for genuine zeros: `Exercise_Hours` 366 rows (12.2%), `Social_Interactions` 257 (8.6%), `Time_on_Education` 250 (8.3%) | A teen who exercises zero hours is recorded as average. Feeds `Offline_Activity` and `Online_To_Offline_Ratio` directly. **Unlike `Parental_Control` this is not a rescale** — it moves only the zero rows and leaves the rest, so it genuinely distorts the fitted models and the metrics will move when it is fixed | Restrict replacement to `Daily_Usage_Hours` (25 rows), where zero is genuinely implausible. Then re-run preprocess → train --save → calibrate --save | 2026-08-27 |
 | ~~No dependency manifest; kernel named `venv` is not one~~ **Closed 2026-08-29.** `requirements.txt` + a real `.venv` | Was: not reproducible on any other machine, M8 blocked | Done. Residual: the Jupyter kernel still binds to global Python313, not `.venv` | 2026-08-23 |
 | `preprocessed.ipynb` cell 26 writes to a **relative** path, landing in `notebook/` | Re-running the notebook drops a stray copy instead of updating the tracked file | Use `Src.config.Preprocessed_Data_Path`; `python main.py preprocess` already does | 2026-08-27 |
 | All three notebooks hardcode `r'D:\Phone addicted\…'` | Repo runs on exactly one machine. `Src/config.py` now exists to fix this | Import the config module in cell 1 | 2026-08-23 |
@@ -124,18 +124,45 @@ Fixed in `377f228`.
 
 ## Recommended next 3 actions
 
-1. **Re-save `models/*.pkl`.** They now lag the code twice over — full-frame fit, pre-tuning
-   hyperparameters — so the committed artifacts and `Src/model.py` disagree about what the model is.
-   `python main.py train --save` fixes it, at the cost of overwriting tracked binaries.
+1. **Decide what to do about `model_rf.pkl`.** The retrain landed and it grew **5.8 MB → 17 MB**
+   (tuned rf is 300 trees at unlimited depth), taking `models/` to 18 MB. rf is also the *worst* of
+   the three (MSE 0.5113 vs gb 0.2675, xgb 0.2478) and is not what the API serves. Either stop
+   committing it, or move the binaries to LFS before this becomes routine.
 2. **Wrap the remaining two stages in the same fitted object.** The frame-relative statistics and
    single-record inference are done (`models/preprocessor.pkl`); `SelectKBest` and `StandardScaler`
    are still fit before the split and live in a second artifact. One `Pipeline` fitted on train would
    close the leakage rule violation and leave the API with a single file to load.
-3. **Fix `Parental_Control`, then re-band the output.** The first is a genuine semantic error every
-   model inherits; the second is what stands between a good RMSE and a warning system that actually
-   varies its warning.
+3. **Fix `Parental_Control`.** Still a genuine semantic error every model inherits — and now it also
+   reaches the advice layer: mean-imputing the binary flag leaves `Unsupervised_Usage` at exactly
+   0.000 for half the cohort, so its q75 threshold (2.4633) is calibrated against a distribution
+   that is half artifact. Exclude it from `ZERO_AS_MISSING`, re-run `preprocess`, `train --save` and
+   `calibrate --save` in that order. (Re-banding is done — see the closed risk above.)
 
 ## Review log
+- 2026-08-29 — **`Parental_Control` excluded from `ZERO_AS_MISSING`**, and the repo's own account of
+  why that mattered turned out to be wrong. The imputation was an *exact positive rescale* of
+  `Unsupervised_Usage` (×0.492667), which `StandardScaler` and `f_regression` cannot see: post-fix
+  `evaluate` reproduces all 14 metric cells to 4 dp, the selected 18 are unchanged, and F is
+  identical at 97.572. So no model was ever corrupted — but the column's *units* were fabricated,
+  which is what reached users through the advice layer (q75 threshold 2.4633 → 5.0000 real hours).
+  Regenerated the CSV (one column changed, `Unsupervised_Usage`, now a clean 0/1 mask), mirrored the
+  change into `notebook/preprocessed.ipynb` and re-executed it (output still `assert_frame_equal` to
+  the tracked CSV), then ran `train --save` and `calibrate --save`. The retrain was **required, not
+  cosmetic**: `preprocessing.pkl`'s scaler held the old moments (mean 1.2297 vs 2.4960) and would
+  have mis-scaled the column by 2×. Side effect: `model_rf.pkl` 5.8 MB → 17 MB.
+- 2026-08-29 — **Warning layer built and calibrated** (`Src/inference.py`, `main.py calibrate` /
+  `score`, `models/thresholds.json`). `modelling.ipynb` cell 28's prototype was measured against the
+  real distribution before being replaced: of its 14 hardcoded rules one could never fire
+  (`Academic_Per_Usage < 0.2`, feature range 11–29) and one fired on 90.6% of the cohort
+  (`Weekend_Ratio > 0.6`). Re-derived at q75/q25, all 14 fire on 23.5–25.6%, median 3 per teenager
+  and never more than 9. Band cuts had a subtler problem: the documented fix — quartiles of the
+  target — is impossible, because 50.8% of the target sits at the ceiling and drags the median there
+  too, degenerating the cuts to `[8.0, 10.0, 10.0]`. Taking them from the 1476 uncensored rows gives
+  `[6.7, 8.0, 9.0]` and spreads the bottom three bands (11.3 / 11.9 / 13.8% vs 1.2 / 5.8 / 30.1%);
+  the top band stays at 63% and a `percentile` field was added because no cut point can fix that.
+  Verified end to end: raw row 7 scores **8.501 / "Addicted" / 30th percentile** through
+  `Scorer.score`, matching the 8.5006 recorded below. `python main.py --help` still runs on the
+  dependency-free interpreter.
 - 2026-08-23 — Baseline review. M0 blocked, M1–M2 in progress, M3+ not started. 8 open risks, 2 of them blocking execution. (`14f0bfc`)
 - 2026-08-27 — M2 gap closed and NaNs resolved, but only in an uncommitted working tree; M4 reached and verified genuine (R² 0.811 off the ceiling, vs 0.000 naive). Leakage confirmed present and measured harmless. New: binary flag corrupted by mean-imputation, model-save cell dumps strings, tuning cell commented out. Metric-illusion risk retired. (`36bf0f1`)
 - 2026-08-27 — Work committed (`9416868`); M2 and M5 closed. Found and fixed a `copy_X` grid entry that centred the training matrix in place and silently degraded every ensemble below it (gb 0.280→0.414, xgb 0.258→0.597) — invisible until the notebook was run in order. rf/gb/xgb serialized to `models/` with their fitted preprocessing and verified by reload. Health 🟡 → 🟢. (`377f228`)

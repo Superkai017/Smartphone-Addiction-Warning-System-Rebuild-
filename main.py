@@ -9,6 +9,8 @@ place to change when a step grows an option.
     python main.py train --save            # fit the models, write models/
     python main.py evaluate --cv           # metrics on the held-out fold
     python main.py tune --random 40        # hyperparameter search
+    python main.py calibrate --save        # fit the severity bands + advice thresholds
+    python main.py score 7                 # score a raw row end to end
     python main.py all                     # preprocess -> train -> evaluate, in order
 
 Every command runs read-only unless you pass `--save`, so `python main.py all`
@@ -35,6 +37,7 @@ from Src.config import (  # noqa: E402  (must follow the sys.path line)
     Model_Path,
     Preprocessed_Data_Path,
     Preprocessor_Path,
+    Thresholds_Path,
 )
 
 
@@ -105,6 +108,65 @@ def cmd_tune(args: argparse.Namespace) -> None:
         print(f"\n(nothing written - pass --save to record this in {Best_Params_Path.name})")
 
 
+def cmd_calibrate(args: argparse.Namespace) -> None:
+    """Fit the severity bands and advice thresholds from the training distribution."""
+    from Src.inference import RULES, calibrate, save_thresholds
+
+    cal = calibrate(args.data, high_q=args.high_q, low_q=args.low_q)
+    lo, hi = cal["score_range"]
+    print(
+        f"{cal['n_rows']} rows | target {cal['target']} in [{lo}, {hi}] | "
+        f"{cal['ceiling_share']:.1%} at the ceiling"
+    )
+    print(f"band cuts (from the non-ceiling rows): {cal['band_cuts']}")
+    print(f"  {' < '.join(cal['band_labels'])}")
+    print(f"\nrule thresholds (high=q{args.high_q}, low=q{args.low_q}):")
+    for feature, direction, _ in RULES:
+        entry = cal["rule_thresholds"][feature]
+        print(f"  {feature:<26}{direction:>5} {entry['value']:>12.4f}")
+
+    if args.save:
+        print(f"\nwrote {save_thresholds(cal, args.out)}")
+    else:
+        print(f"\n(nothing written - pass --save to update {Thresholds_Path.name})")
+
+
+def cmd_score(args: argparse.Namespace) -> None:
+    """Score raw rows end to end: record -> features -> model -> band + advice.
+
+    Reads from the raw CSV by row index so the whole chain can be exercised
+    without a web layer or a hand-written record. Never writes.
+    """
+    import json
+
+    from Src.inference import Scorer
+    from Src.Preprocessed import load_raw_data
+
+    # No validate_raw here: `preprocess_new` -> `transform` already calls it, and
+    # repeating it would imply validation is the caller's job.
+    raw = load_raw_data()
+    rows = raw.iloc[args.rows]
+
+    scorer = Scorer.load(args.model)
+    for index, result in zip(args.rows, scorer.score(rows, limit=args.tips)):
+        if args.json:
+            print(json.dumps(result, indent=2))
+            continue
+        print(
+            f"row {index}: {result['score']:.2f}/10  {result['band']} "
+            f"({result['percentile']:.0f}th percentile) via {result['model']}"
+        )
+        print(f"  {result['band_description']}")
+        print(f"  {result['n_flagged']} of 14 rules flagged, showing {len(result['recommendations'])}:")
+        for tip in result["recommendations"]:
+            print(
+                f"    [{tip['severity']:>5.1f}] {tip['feature']} = {tip['value']:.3f} "
+                f"({tip['direction']} vs {tip['threshold']:.3f})"
+            )
+            print(f"            {tip['message']}")
+        print()
+
+
 def cmd_all(args: argparse.Namespace) -> None:
     """preprocess -> train -> evaluate, in the order the data flows.
 
@@ -146,6 +208,13 @@ DEFAULT_COMMAND = "all"
 TUNABLE = ["lr", "rid", "las", "rf", "gb", "xgb"]
 
 SCORING_DEFAULT = "neg_root_mean_squared_error"
+
+# Mirrored from Src/inference.py rather than imported: `python main.py --help`
+# must not pay for pandas and sklearn just to print a default.
+HIGH_Q = 0.75
+LOW_Q = 0.25
+MAX_TIPS = 3
+DEFAULT_MODEL = "gb"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -221,6 +290,37 @@ def build_parser() -> argparse.ArgumentParser:
     tune.add_argument("--save", action="store_true", help=f"write {Best_Params_Path.name}")
     tune.add_argument("--out", default=Best_Params_Path, help="path for --save")
     tune.set_defaults(func=cmd_tune)
+
+    # -- calibrate ----------------------------------------------------------
+    cal = sub.add_parser("calibrate", help="fit the severity bands + advice thresholds")
+    cal.add_argument("--data", default=Preprocessed_Data_Path, help="frame to calibrate against")
+    cal.add_argument(
+        "--high-q", type=float, default=HIGH_Q, dest="high_q",
+        help=f"quantile a 'high' rule fires above (default {HIGH_Q})",
+    )
+    cal.add_argument(
+        "--low-q", type=float, default=LOW_Q, dest="low_q",
+        help=f"quantile a 'low' rule fires below (default {LOW_Q})",
+    )
+    cal.add_argument("--save", action="store_true", help=f"write {Thresholds_Path.name}")
+    cal.add_argument("--out", default=Thresholds_Path, help="path for --save")
+    cal.set_defaults(func=cmd_calibrate)
+
+    # -- score --------------------------------------------------------------
+    sc = sub.add_parser("score", help="score raw rows end to end (band + advice)")
+    sc.add_argument(
+        "rows", nargs="*", type=int, default=[0],
+        help="row indices in the raw CSV (default: 0)",
+    )
+    sc.add_argument(
+        "--model", default=DEFAULT_MODEL, choices=["rf", "gb", "xgb"],
+        help=f"which fitted model to score with (default {DEFAULT_MODEL})",
+    )
+    sc.add_argument(
+        "--tips", type=int, default=MAX_TIPS, help=f"recommendations to show (default {MAX_TIPS})"
+    )
+    sc.add_argument("--json", action="store_true", help="print the API payload instead")
+    sc.set_defaults(func=cmd_score)
 
     # -- all ----------------------------------------------------------------
     everything = sub.add_parser("all", help="preprocess, train and evaluate in order")

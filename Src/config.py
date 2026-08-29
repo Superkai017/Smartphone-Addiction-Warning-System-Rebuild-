@@ -18,6 +18,11 @@ Model_Artifacts_Path = Model_Path / "preprocessing.pkl"
 # Winning hyperparameters written by `python main.py tune --save`, so the searches
 # behind the constants in `Src/model.py` are reproducible rather than folklore.
 Best_Params_Path = Model_Path / "best_params.json"
+# Severity band cut points, per-rule thresholds and the cohort score/feature
+# distributions, written by `python main.py calibrate`. Committed rather than
+# gitignored: unlike `best_params.json` this one is read at *inference* time, so
+# the API needs it present in a fresh clone.
+Thresholds_Path = Model_Path / "thresholds.json"
 
 Seed = 42
 TEST_SIZE    = 0.2

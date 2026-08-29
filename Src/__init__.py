@@ -11,6 +11,10 @@ third-party imports.
 `model`, `evaluation` and `tuning` are deliberately *not* re-exported at all:
 they import `xgboost` at module scope, and an API that only scores records
 should not need a training dependency. Import them by their full path.
+
+`inference` *is* re-exported, because it is the module an API actually wants and
+it keeps to the same rule - it loads estimators through `joblib` by name rather
+than importing `xgboost`, so `from Src import Scorer` stays cheap.
 """
 
 from importlib import import_module
@@ -23,6 +27,7 @@ if TYPE_CHECKING:  # for type checkers and IDEs only - never executed at runtime
         preprocess_new,
         to_model_matrix,
     )
+    from .inference import Scorer, classify, recommend, score_records
 
 from .config import (
     Best_Params_Path,
@@ -36,6 +41,7 @@ from .config import (
     Raw_Data_Path,
     Seed,
     TEST_SIZE,
+    Thresholds_Path,
 )
 
 # name -> submodule it lives in. Resolved on first attribute access.
@@ -44,6 +50,10 @@ _LAZY_EXPORTS = {
     "preprocess": "Preprocessed",
     "preprocess_new": "Preprocessed",
     "to_model_matrix": "Preprocessed",
+    "Scorer": "inference",
+    "classify": "inference",
+    "recommend": "inference",
+    "score_records": "inference",
 }
 
 # Listed literally rather than splatting `_LAZY_EXPORTS`, so static analysers
@@ -60,10 +70,15 @@ __all__ = [
     "K_BEST",
     "Seed",
     "TEST_SIZE",
+    "Thresholds_Path",
     "load_preprocessor",
     "preprocess",
     "preprocess_new",
     "to_model_matrix",
+    "Scorer",
+    "classify",
+    "recommend",
+    "score_records",
 ]
 
 
