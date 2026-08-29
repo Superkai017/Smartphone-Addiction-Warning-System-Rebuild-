@@ -13,7 +13,7 @@ row has no standard deviation, a `Parental_Control` of 0 stays 0), so `fit`
 records them once on the training frame and `transform` replays them.
 
     # training path - rewrites the CSV and the fitted-state artifact
-    python -m Src.Preprocessed
+    python main.py preprocess
 
     # inference path - unknown new data, scored with the training statistics
     from Src.Preprocessed import preprocess_new, to_model_matrix
@@ -34,7 +34,7 @@ import joblib
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder
 
-try:  # package import: `python -m Src.Preprocessed`, `from Src import ...`
+try:  # package import: `from Src.Preprocessed import ...`, `from Src import ...`
     from .config import (
         Model_Artifacts_Path,
         Preprocessed_Data_Path,
@@ -400,7 +400,7 @@ def load_preprocessor(path: Path | str = Preprocessor_Path) -> dict[str, Any]:
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(
-            f"{path} not found - run `python -m Src.Preprocessed` to fit and save it"
+            f"{path} not found - run `python main.py preprocess` to fit and save it"
         )
     return joblib.load(path)
 
@@ -416,7 +416,7 @@ def to_model_matrix(
     Returned as a named frame so the 18 columns stay inspectable. Match the
     estimator when scoring, or sklearn warns on every call: the committed
     `models/*.pkl` came from the notebook and were fitted on bare arrays, so
-    pass `X.to_numpy()`; anything written by `python -m Src.model --save` was
+    pass `X.to_numpy()`; anything written by `python main.py train --save` was
     fitted on a named frame, so pass `X` itself.
     """
     fitted: Mapping[str, Any] = (
@@ -448,14 +448,3 @@ def build_preprocessed_dataset(
     if preprocessor_path is not None:
         save_preprocessor(state, preprocessor_path)
     return df
-
-
-def main() -> None:
-    df = build_preprocessed_dataset()
-    print(f"wrote {df.shape[0]} rows x {df.shape[1]} cols -> {Preprocessed_Data_Path}")
-    print(f"NaNs: {int(df.isna().sum().sum())}")
-    print(f"fitted state -> {Preprocessor_Path}")
-
-
-if __name__ == "__main__":
-    main()

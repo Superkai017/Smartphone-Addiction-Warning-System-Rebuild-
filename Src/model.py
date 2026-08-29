@@ -8,10 +8,10 @@ This module builds and saves models. It does not score them - that is
 `Src/evaluation.py` - and it does not search for hyperparameters - that is
 `Src/tuning.py`. Both import from here; nothing here imports them back.
 
-    python -m Src.model                 # train, write nothing
-    python -m Src.model --save          # train and write models/
-    python -m Src.evaluation --cv       # the metrics that used to live here
-    python -m Src.tuning --models gb    # re-derive the constants below
+    python main.py train                # fit, write nothing
+    python main.py train --save         # fit and write models/
+    python main.py evaluate --cv        # the metrics that used to live here
+    python main.py tune --models gb     # re-derive the constants below
 
 **Order differs from the notebook on purpose.** Cells 7-9 fit `SelectKBest` and
 `StandardScaler` on the full frame and split afterwards; here the split comes
@@ -28,7 +28,6 @@ estimators so the set stays internally consistent. `models/preprocessor.pkl`
 
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 from typing import Any, Mapping, cast
 
@@ -43,8 +42,9 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBRegressor
 
-try:  # package import: `python -m Src.model`, `from Src import ...`
+try:  # package import: `from Src.model import ...`
     from .config import (
+        K_BEST,
         Model_Artifacts_Path,
         Model_Path,
         Preprocessed_Data_Path,
@@ -54,6 +54,7 @@ try:  # package import: `python -m Src.model`, `from Src import ...`
     from .Preprocessed import TARGET
 except ImportError:  # script import: `python model.py` from inside Src/
     from config import (
+        K_BEST,
         Model_Artifacts_Path,
         Model_Path,
         Preprocessed_Data_Path,
@@ -63,12 +64,9 @@ except ImportError:  # script import: `python model.py` from inside Src/
     from Preprocessed import TARGET
 
 
-# `k=18` is what the notebook selected and what `models/preprocessing.pkl` was
-# fitted with. Changing it invalidates every artifact in `models/`.
-K_BEST = 18
-
-# Hyperparameters from the grid searches in cells 12 and 14. The searches are
-# commented out there because they take ~20 minutes; these are their winners.
+# Hyperparameters from the grid searches in cells 12 and 14, kept as constants
+# so a fit does not have to re-run a 21-minute search. `Src/tuning.py` re-derives
+# them: `python main.py tune`.
 LINEAR_MODELS: dict[str, Any] = {
     "lr": LinearRegression(),
     "rid": Ridge(),
@@ -246,39 +244,3 @@ def save_artifacts(
     return written
 
 
-# --------------------------------------------------------------------------- #
-# Entry point
-# --------------------------------------------------------------------------- #
-def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
-    parser.add_argument(
-        "-k", type=int, default=K_BEST, help=f"features to keep (default {K_BEST})"
-    )
-    parser.add_argument(
-        "--save",
-        action="store_true",
-        help="write preprocessing.pkl and model_*.pkl, replacing the notebook's",
-    )
-    parser.add_argument("--out", default=Model_Path, help="directory for --save")
-    args = parser.parse_args(argv)
-
-    X_train, X_test, y_train, _, selector, scaler = prepare(k=args.k)
-    print(
-        f"train {X_train.shape} | test {X_test.shape} | "
-        f"{args.k} features: {', '.join(list(X_train.columns)[:4])}, ..."
-    )
-
-    fitted = train_models(X_train, y_train)
-    print(f"fitted {len(fitted)} models: {', '.join(fitted)}")
-
-    if args.save:
-        for path in save_artifacts(fitted, selector, scaler, args.out):
-            print(f"wrote {path}")
-    else:
-        print("(nothing written - pass --save to replace the artifacts in models/)")
-
-    print("\nFor metrics run:  python -m Src.evaluation --cv")
-
-
-if __name__ == "__main__":
-    main()

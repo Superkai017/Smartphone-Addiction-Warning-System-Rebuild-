@@ -4,10 +4,10 @@ Module form of cells 12 and 14 of `notebook/modelling.ipynb`, which are
 commented out there because a full grid takes ~20 minutes. The winners are
 hardcoded in `Src/model.py`; this is the code that re-derives them.
 
-    python -m Src.tuning                    # full grid over all six models
-    python -m Src.tuning --models gb xgb    # just those two
-    python -m Src.tuning --random 40        # 40 random draws per model instead
-    python -m Src.tuning --save             # write models/best_params.json
+    python main.py tune                     # full grid over all six models
+    python main.py tune --models gb xgb     # just those two
+    python main.py tune --random 40         # 40 random draws per model instead
+    python main.py tune --save              # write models/best_params.json
 
 **Searching a Pipeline, not a matrix.** The notebook searches on
 `X_new_train`, which was already selected and scaled using the whole dataset.
@@ -38,7 +38,6 @@ while the test matrix is left alone - the defect fixed in `377f228`.
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import time
@@ -52,7 +51,7 @@ import pandas as pd
 from sklearn.exceptions import ConvergenceWarning
 from sklearn.model_selection import GridSearchCV, KFold, RandomizedSearchCV, cross_val_score
 
-try:  # package import: `python -m Src.tuning`
+try:  # package import: `from Src.tuning import ...`
     from .config import Best_Params_Path, Seed
     from .model import ENSEMBLE_MODELS, K_BEST, LINEAR_MODELS, build_pipeline, get_data
 except ImportError:  # script import: `python tuning.py` from inside Src/
@@ -328,7 +327,7 @@ def print_report(report: Mapping[str, Any]) -> None:
     if beaten:
         print(
             f"\n{len(beaten)} model(s) improved: {', '.join(beaten)}. "
-            "Update the constants in Src/model.py, then re-run python -m Src.evaluation."
+            "Update the constants in Src/model.py, then re-run python main.py evaluate."
         )
     else:
         print("\nNo model beat its current configuration - leave Src/model.py alone.")
@@ -340,43 +339,3 @@ def save_report(report: Mapping[str, Any], path: Path | str = Best_Params_Path) 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     return path
-
-
-def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
-    parser.add_argument(
-        "--models", nargs="+", choices=ALL_MODELS, default=ALL_MODELS,
-        help="which models to search (default: all)",
-    )
-    parser.add_argument(
-        "-k", type=int, default=K_BEST, help=f"features to keep (default {K_BEST})"
-    )
-    parser.add_argument("--folds", type=int, default=5, help="CV folds (default 5)")
-    parser.add_argument(
-        "--random", type=int, default=None, metavar="N",
-        help="sample N candidates per model instead of the full grid",
-    )
-    parser.add_argument("--scoring", default=SCORING, help=f"sklearn scorer (default {SCORING})")
-    parser.add_argument("--verbose", type=int, default=0, help="GridSearchCV verbosity")
-    parser.add_argument(
-        "--save", action="store_true", help=f"write {Best_Params_Path.name}"
-    )
-    parser.add_argument("--out", default=Best_Params_Path, help="path for --save")
-    args = parser.parse_args(argv)
-
-    if not args.verbose:
-        quiet_workers()
-    report = search(
-        models=args.models, k=args.k, folds=args.folds,
-        n_iter=args.random, scoring=args.scoring, verbose=args.verbose,
-    )
-    print_report(report)
-
-    if args.save:
-        print(f"\nwrote {save_report(report, args.out)}")
-    else:
-        print(f"\n(nothing written - pass --save to record this in {Best_Params_Path.name})")
-
-
-if __name__ == "__main__":
-    main()

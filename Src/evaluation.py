@@ -4,8 +4,8 @@ Module form of cells 17-22 of `notebook/modelling.ipynb`. `Src/model.py` owns
 the data, the estimators and the artifacts; everything that only *measures* a
 fitted model lives here.
 
-    python -m Src.evaluation            # metrics on the held-out test fold
-    python -m Src.evaluation --cv       # add honest 5-fold CV over a Pipeline
+    python main.py evaluate             # metrics on the held-out test fold
+    python main.py evaluate --cv        # add honest 5-fold CV over a Pipeline
 
 Two tables come out of a plain run, and the second is the one to read.
 `Addiction_Level` is capped at 10.0 with 50.8% of rows sitting exactly there,
@@ -15,7 +15,6 @@ saturating. `non_ceiling_mask` restricts scoring to the rows underneath the cap.
 
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -30,7 +29,7 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import KFold, cross_val_score
 
-try:  # package import: `python -m Src.evaluation`
+try:  # package import: `from Src.evaluation import ...`
     from .config import Preprocessed_Data_Path, Seed
     from .model import (
         ENSEMBLE_MODELS,
@@ -180,19 +179,3 @@ def report(
         show_table("Honest 5-fold CV (selection + scaling refit per fold):", tables["cv"])
 
     return tables
-
-
-def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
-    parser.add_argument(
-        "-k", type=int, default=K_BEST, help=f"features to keep (default {K_BEST})"
-    )
-    parser.add_argument(
-        "--cv", action="store_true", help="also run honest 5-fold CV over a Pipeline"
-    )
-    args = parser.parse_args(argv)
-    report(k=args.k, cv=args.cv)
-
-
-if __name__ == "__main__":
-    main()
