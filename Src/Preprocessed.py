@@ -31,11 +31,16 @@ ID_COLUMNS = ["ID", "Name", "Location"]
 # Columns where 0 reads as "not recorded" rather than a real measurement, and
 # where a 0 would otherwise blow up the ratio features below. Imputed with the
 # training-set mean, computed over the un-imputed column (zeros included).
+#
+# `Parental_Control` was in this list until 2026-08-29 and must not go back.
+# It is a genuine binary 0/1 flag (1478 zeros, 49.3%), so mean-imputing it
+# turned "no parental control" into 0.5073 and made `Unsupervised_Usage` a
+# graded weight that meant nothing - not a rescaling, a mislabelling. A zero
+# here is data, not a gap.
 ZERO_AS_MISSING = [
     "Daily_Usage_Hours",
     "Social_Interactions",
     "Exercise_Hours",
-    "Parental_Control",
     "Screen_Time_Before_Bed",
     "Time_on_Social_Media",
     "Time_on_Gaming",
@@ -253,9 +258,11 @@ def add_psychological_composite(
 def add_context(df: pd.DataFrame) -> pd.DataFrame:
     """Moderators: academic cost, supervision, school year.
 
-    `Parental_Control` is nominally 0/1, but `impute_zeros_with_mean` has
-    already replaced its zeros with the training mean, so `Unsupervised_Usage`
-    ends up a graded weight rather than a clean on/off mask.
+    `Unsupervised_Usage` is a clean on/off mask: `Parental_Control` is left out
+    of `ZERO_AS_MISSING`, so the flag stays 0/1 and the feature is either the
+    full daily usage (unsupervised) or exactly zero (supervised). It was a
+    graded weight until 2026-08-29, when mean-imputation was still turning the
+    flag into 0.5073 - see the note on `ZERO_AS_MISSING`.
     """
     df["Academic_Per_Usage"] = df["Academic_Performance"] / df["Daily_Usage_Hours"]
     df["Unsupervised_Usage"] = df["Daily_Usage_Hours"] * (1 - df["Parental_Control"])
