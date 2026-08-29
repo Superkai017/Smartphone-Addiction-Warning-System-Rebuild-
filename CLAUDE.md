@@ -34,8 +34,20 @@ fails on import. Use the Python313 interpreter directly, or make a real project 
 python -m venv .venv && .venv/Scripts/activate
 pip install pandas numpy matplotlib seaborn scikit-learn xgboost joblib jupyter
 
-# Regenerate data/Preprocessed Data/preprocessed_data.csv from the raw CSV
+# Regenerate data/Preprocessed Data/preprocessed_data.csv and models/preprocessor.pkl
 python -m Src.Preprocessed
+
+# Train the models. Writes nothing unless --save
+python -m Src.model
+python -m Src.model --save --out models
+
+# Score them. --cv adds honest 5-fold CV with selection/scaling refit per fold
+python -m Src.evaluation
+python -m Src.evaluation --cv
+
+# Re-derive the hyperparameters in Src/model.py. Full grid is ~5900 fits
+python -m Src.tuning --random 40        # fast sample
+python -m Src.tuning --save             # full grid -> models/best_params.json
 
 # Run notebooks
 jupyter lab notebook/
@@ -58,10 +70,17 @@ ensembles had been executed *before* the search. Fixed in `377f228`.
 data/Raw Data/teen_phone_addiction_dataset.csv    3000 x 25  (Kaggle, synthetic)
   ├─ notebook/eda.ipynb           distributions, boxplots, f_regression ranking, heatmap
   ├─ notebook/preprocessed.ipynb  drop IDs → label-encode Gender → zero-impute → 24 features
-  └─ Src/Preprocessed.py          the same pipeline as an importable module
-       └─ data/Preprocessed Data/preprocessed_data.csv   3000 x 28
-            └─ notebook/modelling.ipynb   SelectKBest(k=18) → scale → split → linear + ensembles
-                 └─ models/  model_{rf,gb,xgb}.pkl, preprocessing.pkl
+  └─ Src/Preprocessed.py          the same pipeline as an importable module, split fit/transform
+       ├─ data/Preprocessed Data/preprocessed_data.csv   3000 x 28
+       │    ├─ notebook/modelling.ipynb   SelectKBest(k=18) → scale → split → linear + ensembles
+       │    │    └─ models/  model_{rf,gb,xgb}.pkl, preprocessing.pkl   ← the committed artifacts
+       │    └─ Src/model.py   split → SelectKBest(k=18) → scale → same models, train-only fit
+       │         ├─ Src/evaluation.py   metrics, ceiling-masked metrics, honest Pipeline CV
+       │         └─ Src/tuning.py       GridSearchCV over the Pipeline → models/best_params.json
+       └─ models/preprocessor.pkl   the fitted statistics, replayed onto new records
+
+new record (dict / DataFrame)
+  └─ preprocess_new()  → 27 engineered cols → to_model_matrix() → 18 scaled cols → model.predict
 ```
 
 `preprocessed_data.csv` keeps `Age`, `Gender`, `Daily_Usage_Hours` and the target `Addiction_Level`
@@ -71,6 +90,12 @@ as raw columns, plus **24 engineered features**. The other 18 raw predictors (`S
 `models/preprocessing.pkl` is a dict of `{selector, scaler, features}` — a `SelectKBest` fitted on
 27 columns and a `StandardScaler` on the surviving 18.
 
+`models/preprocessor.pkl` sits *ahead* of it: `{gender_classes, zero_means, psych_stats,
+output_columns, feature_columns}`, written by `python -m Src.Preprocessed`. It is what lets a single
+raw record be preprocessed identically to the training frame. Refit and re-save it whenever
+`ZERO_AS_MISSING`, `PSYCH_COLUMNS` or any feature formula changes, or new records will be engineered
+against stale statistics.
+
 ### Preprocessing exists twice — keep both in sync
 
 `notebook/preprocessed.ipynb` and `Src/Preprocessed.py` implement the same pipeline and produce
@@ -78,6 +103,10 @@ identical output (verified with `assert_frame_equal` against the committed CSV).
 must be mirrored in the other**, or the notebook and the module will silently disagree about what
 the model was trained on. The module is the better place for logic the API will need; the notebook
 retains the exploratory framing and its committed outputs.
+
+The fit/transform split is module-only and does **not** need mirroring: it changed the signatures,
+not the arithmetic, and `preprocess(raw)` still reproduces the committed CSV exactly. Any change to a
+*formula* still does.
 
 ## Modeling constraints you must account for
 
@@ -106,23 +135,39 @@ retains the exploratory framing and its committed outputs.
   `.fit_transform()` over the full frame to preprocessing. `modelling.ipynb` currently violates this
   — `SelectKBest` and `StandardScaler` are fit on the full frame before `train_test_split`. Measured
   cost is nil (0.2799 vs 0.2798 inside a train-only `Pipeline`), so fix it because the API needs one
-  fitted pipeline object anyway, not because the numbers are wrong.
+  fitted pipeline object anyway, not because the numbers are wrong. `Src/model.py` does it in the
+  right order (split → select → scale, both fitted on train) and reproduces the notebook's headline
+  metrics to four decimals, which is the direct confirmation that the cost is nil. The committed
+  `models/*.pkl` are still the notebook's full-frame fit; `python -m Src.model --save` replaces them
+  with the train-only ones.
 - **The psychological features carry no signal.** `f_regression` p-values: `Distress_Index` 0.13,
   `Self_Esteem_z` 0.22, `Anxiety_Level_z` 0.38, `Depression_Level_z` 0.64, `Grade_Num` 0.75, `Age`
   0.086, `Gender` 0.085 — `k=18` drops all of them. The synthetic target is a near-deterministic
   function of usage and sleep. A model trained here learns the generator's arithmetic, not
   adolescent psychology; say so rather than overclaiming in any user-facing copy.
-- **Half the inference path is not serializable as written.** `preprocessing.pkl` resumes from the
-  engineered 27-column frame. Ahead of it sit the column drops, a fitted-but-never-saved
-  `LabelEncoder` for `Gender`, the 24 feature formulas, and the zero-fill — whose means are
-  recomputed from whatever frame is loaded, so they are undefined for a single record. The API
-  cannot score a raw record until preprocessing is a fitted, serialized `Pipeline`.
+- **Single-record inference works; use `preprocess_new`, never `preprocess`.** `preprocessing.pkl`
+  resumes from the engineered 27-column frame. Ahead of it sat three frame-relative steps — the
+  `Gender` `LabelEncoder`, the zero-fill means, and the affect z-scores — that were undefined for one
+  row. `Src/Preprocessed.py` now splits `fit` from `transform` and persists those statistics to
+  `models/preprocessor.pkl`, so `preprocess_new(record) → to_model_matrix(...)` scores a raw record.
+  `preprocess(df)` is still fit-then-transform on the same frame: correct for the full training CSV
+  and wrong for anything smaller. The selector and scaler are still fit before the split (above);
+  folding all four stages into one `Pipeline` remains the tidier end state.
 
 ## Conventions in this codebase
 
 - Notebooks are committed **with outputs**; keep it that way for review continuity.
+- `Src/__init__.py` re-exports the preprocessing helpers but **not** `Src/model.py`,
+  `Src/evaluation.py` or `Src/tuning.py`, all of which pull in `xgboost` at module scope. Keep it
+  that way: an API that only needs `preprocess_new` should not be forced to install a training
+  dependency.
+- **The `Src/` modelling modules form a one-way chain: `model.py` ← `evaluation.py`, `tuning.py`.**
+  `model.py` owns the data, the estimators and the artifacts; `evaluation.py` only measures fitted
+  models; `tuning.py` only searches for parameters. Neither may be imported *by* `model.py` — that
+  would be a cycle. Anything all three need goes in `model.py` or `config.py`.
 - **New code takes paths from `Src/config.py`** (`Raw_Data_Path`, `Preprocessed_Data_Path`,
-  `Model_Path`, `Seed`, `TEST_SIZE`), which resolves them relative to the repo root. The three
+  `Model_Path`, `Preprocessor_Path`, `Model_Artifacts_Path`, `Seed`, `TEST_SIZE`), which resolves
+  them relative to the repo root. The three
   notebooks still hardcode `r'D:\Phone addicted\…'` absolute strings — they resolve on this machine
   and nowhere else. Migrate them to the config module rather than patching the string.
 - `preprocessed.ipynb`'s final cell writes to a **relative** `preprocessed_data.csv`, which lands in
