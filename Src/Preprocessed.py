@@ -1,29 +1,4 @@
-"""Preprocessing pipeline for the teen phone addiction dataset.
 
-Script form of `notebook/preprocessed.ipynb`: reads the raw Kaggle CSV, drops
-identifiers, label-encodes `Gender`, imputes zero-valued measurements with the
-column mean, engineers 24 features, then drops the raw predictors it derived
-them from.
-
-The pipeline is split into `fit` and `transform` because three of its steps
-learn something from the data they see - the `Gender` label encoding, the
-zero-imputation means, and the affect z-scores. Re-deriving those from an
-incoming record is wrong (a lone "Other" encodes to 0 instead of 2, a single
-row has no standard deviation, a `Parental_Control` of 0 stays 0), so `fit`
-records them once on the training frame and `transform` replays them.
-
-    # training path - rewrites the CSV and the fitted-state artifact
-    python main.py preprocess
-
-    # inference path - unknown new data, scored with the training statistics
-    from Src.Preprocessed import preprocess_new, to_model_matrix
-    features = preprocess_new({"Age": 15, "Gender": "Male", ...})
-    X = to_model_matrix(features)
-
-Scaling is deliberately NOT done here. It belongs after the train/test split so
-the test fold does not leak into the fitted scaler - see `notebook/modelling.ipynb`.
-`to_model_matrix` applies the scaler that split already fitted.
-"""
 
 from __future__ import annotations
 

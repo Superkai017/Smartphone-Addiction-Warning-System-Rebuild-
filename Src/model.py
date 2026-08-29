@@ -1,31 +1,4 @@
-"""Data, estimators and artifacts for the Addiction_Level regressors.
 
-Module form of `notebook/modelling.ipynb`: loads the preprocessed CSV, splits,
-selects the top `k` features and scales them, and fits the linear and ensemble
-families with the hyperparameters the grid searches settled on.
-
-This module builds and saves models. It does not score them - that is
-`Src/evaluation.py` - and it does not search for hyperparameters - that is
-`Src/tuning.py`. Both import from here; nothing here imports them back.
-
-    python main.py train                # fit, write nothing
-    python main.py train --save         # fit and write models/
-    python main.py evaluate --cv        # the metrics that used to live here
-    python main.py tune --models gb     # re-derive the constants below
-
-**Order differs from the notebook on purpose.** Cells 7-9 fit `SelectKBest` and
-`StandardScaler` on the full frame and split afterwards; here the split comes
-first and both are fitted on the training fold only. The measured cost of the
-notebook's order is nil (0.2799 vs 0.2798), so this is about the rule, and about
-having one `Pipeline` the API can load - not about the numbers being wrong.
-
-`--save` therefore does **not** reproduce the committed `models/*.pkl`. Those
-predate this module twice over: they were fitted on the full frame, and at the
-pre-tuning hyperparameters. `--save` replaces them with the train-only fit at
-the constants below, and rewrites `preprocessing.pkl` alongside the three
-estimators so the set stays internally consistent. `models/preprocessor.pkl`
-(the raw-record statistics from `Src/Preprocessed.py`) is untouched.
-"""
 
 from __future__ import annotations
 

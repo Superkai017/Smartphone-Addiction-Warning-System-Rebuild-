@@ -1,17 +1,4 @@
-"""Scoring and reporting for the Addiction_Level regressors.
 
-Module form of cells 17-22 of `notebook/modelling.ipynb`. `Src/model.py` owns
-the data, the estimators and the artifacts; everything that only *measures* a
-fitted model lives here.
-
-    python main.py evaluate             # metrics on the held-out test fold
-    python main.py evaluate --cv        # add honest 5-fold CV over a Pipeline
-
-Two tables come out of a plain run, and the second is the one to read.
-`Addiction_Level` is capped at 10.0 with 50.8% of rows sitting exactly there,
-so an overall R2 is flattered by a large block of rows any model gets right by
-saturating. `non_ceiling_mask` restricts scoring to the rows underneath the cap.
-"""
 
 from __future__ import annotations
 

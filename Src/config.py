@@ -1,9 +1,4 @@
-"""Project-wide paths.
 
-Paths are resolved relative to the repo root (derived from this file's location)
-rather than hardcoded absolute Windows strings, so the package works from any
-working directory and on any machine.
-"""
 
 from pathlib import Path
 
