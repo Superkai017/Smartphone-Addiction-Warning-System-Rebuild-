@@ -232,9 +232,33 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _dependency_help(missing: str | None) -> str:
+    """Turn a bare ModuleNotFoundError into something actionable.
+
+    The usual cause is not a broken checkout but the wrong interpreter: `python`
+    on PATH here is a bare 3.10 with none of the dependencies, while the
+    packages live under a different install. Print which interpreter is actually
+    running so that is obvious.
+    """
+    return (
+        f"\nmissing dependency: {missing}\n\n"
+        f"  running   {sys.executable}\n"
+        f"            Python {sys.version.split()[0]}\n\n"
+        f"  This interpreter does not have the project's dependencies installed.\n"
+        f"  Create a project environment and install them:\n\n"
+        f"      python -m venv .venv\n"
+        f"      .venv\\Scripts\\activate        # Linux/macOS: source .venv/bin/activate\n"
+        f"      pip install -r requirements.txt\n"
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    args.func(args)
+    try:
+        args.func(args)
+    except ModuleNotFoundError as exc:
+        print(_dependency_help(exc.name), file=sys.stderr)
+        raise SystemExit(1) from exc
 
 
 if __name__ == "__main__":
