@@ -19,9 +19,10 @@ first and both are fitted on the training fold only. The measured cost of the
 notebook's order is nil (0.2799 vs 0.2798), so this is about the rule, and about
 having one `Pipeline` the API can load - not about the numbers being wrong.
 
-`--save` therefore does **not** reproduce the committed `models/*.pkl`, which
-were written from the notebook's full-frame fit. It replaces them with the
-train-only equivalents, and rewrites `preprocessing.pkl` alongside the three
+`--save` therefore does **not** reproduce the committed `models/*.pkl`. Those
+predate this module twice over: they were fitted on the full frame, and at the
+pre-tuning hyperparameters. `--save` replaces them with the train-only fit at
+the constants below, and rewrites `preprocessing.pkl` alongside the three
 estimators so the set stays internally consistent. `models/preprocessor.pkl`
 (the raw-record statistics from `Src/Preprocessed.py`) is untouched.
 """
@@ -64,29 +65,39 @@ except ImportError:  # script import: `python model.py` from inside Src/
     from Preprocessed import TARGET
 
 
-# Hyperparameters from the grid searches in cells 12 and 14, kept as constants
-# so a fit does not have to re-run a 21-minute search. `Src/tuning.py` re-derives
-# them: `python main.py tune`.
+# Winners of the full grid search: 1189 candidates, 5945 fits, ~21 min. Re-derive
+# with `python main.py tune --save`, which writes `models/best_params.json` -
+# gitignored, so *these constants are the tracked record of the search*, not the
+# JSON. Keep the numbers below current if you change them.
+# CV RMSE against the previous values: rid 1.0076 -> 1.0051, las 1.6135 -> 1.0058,
+# rf 0.7033 -> 0.7007, gb 0.5312 -> 0.5138, xgb 0.5195 -> 0.4984. `lr` has nothing
+# to tune - the search confirmed its defaults.
+#
+# NOTE: the pickles in `models/` predate these values. Run
+# `python main.py train --save` to bring the artifacts back in step.
 LINEAR_MODELS: dict[str, Any] = {
     "lr": LinearRegression(),
-    "rid": Ridge(),
-    "las": Lasso(),
+    # Default alpha=1.0 shrinks Lasso to the intercept, so it scored exactly the
+    # mean baseline (R2 0.00). The grid had to be extended below the notebook's
+    # 0.1 before it found anything that fits.
+    "rid": Ridge(alpha=10.0, solver="sparse_cg", tol=1e-2),
+    "las": Lasso(alpha=0.01, max_iter=1000, selection="cyclic", tol=1e-3),
 }
 
 ENSEMBLE_MODELS: dict[str, Any] = {
     "rf": RandomForestRegressor(
         bootstrap=True,
-        max_depth=20,
+        max_depth=None,
         min_samples_leaf=2,
         min_samples_split=2,
-        n_estimators=100,
+        n_estimators=300,
         random_state=Seed,
     ),
     "gb": GradientBoostingRegressor(
         learning_rate=0.2,
         max_depth=3,
-        min_samples_leaf=1,
-        min_samples_split=2,
+        min_samples_leaf=4,
+        min_samples_split=10,
         n_estimators=300,
         random_state=Seed,
     ),
@@ -95,7 +106,7 @@ ENSEMBLE_MODELS: dict[str, Any] = {
         learning_rate=0.2,
         max_depth=3,
         n_estimators=300,
-        subsample=1.0,
+        subsample=0.8,
         random_state=Seed,
     ),
 }

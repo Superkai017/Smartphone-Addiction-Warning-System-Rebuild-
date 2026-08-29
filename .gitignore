@@ -218,3 +218,4 @@ __marimo__/
 .streamlit/secrets.toml
 feature-engineer.txt
 .vscode
+best_params.json
