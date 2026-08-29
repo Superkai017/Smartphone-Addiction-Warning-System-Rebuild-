@@ -19,22 +19,28 @@ close a risk.
 
 ## Environment & commands
 
-No dependency manifest is committed — this is the longest-standing blocker in the project.
+`requirements.txt` pins every dependency to the versions this project is known to run on
+(Python 3.13.9, pandas 2.2.3, scikit-learn 1.6.1, xgboost 3.1.2). `.venv/` is the project
+environment and is gitignored.
+
+**`python` on PATH is not the right interpreter.** It is a bare 3.10.0rc2 with *nothing* installed —
+no pandas, no joblib, no sklearn — so running anything through it fails with `ModuleNotFoundError`.
+The packages live under `…\Programs\Python\Python313\python.exe`. Always check
+`python -c "import sys; print(sys.executable)"` before blaming the code for an import error;
+`main.py` catches `ModuleNotFoundError` and prints the running interpreter for exactly this reason.
 
 All three notebooks bind to a Jupyter kernel named `venv` (display name "Python (venv)") registered
-globally in `%APPDATA%\jupyter\kernels\venv`. **It is not a venv**: `kernel.json` points at the
-global `…\Programs\Python\Python313\python.exe` (3.13.9, pandas 2.2.3, scikit-learn 1.6.1). The
-`python` on PATH is a different interpreter (3.10.0rc2) with no pandas, so anything run through it
-fails on import. Use the Python313 interpreter directly, or make a real project venv.
-
-`modelling.ipynb` imports `xgboost`, which no doc or manifest declares.
+globally in `%APPDATA%\jupyter\kernels\venv`. **That kernel is not this venv**: its `kernel.json`
+points at the global Python313 install. It works, because Python313 has the same packages, but
+`.venv` is the reproducible one — repoint the kernel at it when convenient.
 
 ```bash
-# Create a project-local env (still does not exist)
+# One-time setup
 python -m venv .venv && .venv/Scripts/activate
-pip install pandas numpy matplotlib seaborn scikit-learn xgboost joblib jupyter
+pip install -r requirements.txt
 
 # Everything runnable goes through main.py. Nothing writes without --save
+python main.py                          # no arguments -> runs `all`
 python main.py --help
 
 # Regenerate data/Preprocessed Data/preprocessed_data.csv and models/preprocessor.pkl

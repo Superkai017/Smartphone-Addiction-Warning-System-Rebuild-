@@ -34,7 +34,7 @@ than assumed.
 
 | # | Milestone | Status | Evidence |
 |---|-----------|--------|----------|
-| M0 | Environment reproducible | 🔴 Blocked | Still no manifest. The `venv` kernel is **not a venv** — `kernel.json` points at global `Python313\python.exe` (3.13.9, pandas 2.2.3, sklearn 1.6.1). `xgboost`, `joblib` and `scipy` are all imported and undeclared. |
+| M0 | Environment reproducible | 🟢 Done | **Closed 2026-08-29.** `requirements.txt` pins all 11 dependencies to the working versions; `.venv/` created from Python 3.13.9 and gitignored. `xgboost`, `joblib` and `scipy` are now declared. Remaining nit: the `venv` Jupyter kernel still points at the global Python313 install rather than `.venv`. |
 | M1 | Data foundation | 🟡 In progress | Target semantics now resolved *in code*: regression, then post-hoc severity bands (`classify_addiction`, cell 28). CLAUDE.md records this; README still frames it as native classification. |
 | M2 | Preprocessing complete | 🟢 Done | Two implementations, byte-identical output. Notebook regenerates the CSV exactly (`161eec6`); `Src/Preprocessed.py` verified frame-equal this review. 0 NaNs, 0 infinities. |
 | M3 | Split & scaling | 🟡 In progress | Order still inverted — `SelectKBest`/`StandardScaler` fit on the full frame (cells 7–8) before `train_test_split` (cell 9). Now measured: honest CV is *better* than the reported split, so the cost is nil. Split still unstratified. |
@@ -114,7 +114,7 @@ Fixed in `377f228`.
 | ~~**Model-save cell (c29) is commented out**, as is the tuning cell (c14).~~ **Closed 2026-08-29.** `main.py train --save` is c29; `Src/tuning.py` is c12+c14, runnable on demand. Its `models/best_params.json` is gitignored, so the tracked record of the search is the constants in `Src/model.py` plus their before/after CV numbers | Was: the artifacts in `models/` had no committed code that reproduces them, and the searches behind the hyperparameters were folklore | Done. Residual: `--save` writes the train-only fit, so it does not byte-reproduce the committed pickles | 2026-08-27 |
 | `.replace(0, mean)` applied to `Parental_Control`, a **binary 0/1 flag** with 1478 zeros (49.3%) | "No parental control" becomes 0.5073, so `Unsupervised_Usage = Daily × (1 − PC)` is mislabelled, not merely rescaled. Every artifact in `models/` inherits it | Exclude `Parental_Control` from `ZERO_AS_MISSING` in `Src/Preprocessed.py` and re-run | 2026-08-27 |
 | The same replacement fabricates activity for genuine zeros: `Exercise_Hours` 366 rows (12.2%), `Social_Interactions` 257 (8.6%), `Time_on_Education` 250 (8.3%) | A teen who exercises zero hours is recorded as average. Feeds `Offline_Activity` and `Online_To_Offline_Ratio` directly | Restrict replacement to `Daily_Usage_Hours` (25 rows), where zero is genuinely implausible | 2026-08-27 |
-| No dependency manifest; kernel named `venv` is not one | Not reproducible on any other machine. M8 blocked | `pip freeze > requirements.txt` from Python313, then a real `.venv` | 2026-08-23 |
+| ~~No dependency manifest; kernel named `venv` is not one~~ **Closed 2026-08-29.** `requirements.txt` + a real `.venv` | Was: not reproducible on any other machine, M8 blocked | Done. Residual: the Jupyter kernel still binds to global Python313, not `.venv` | 2026-08-23 |
 | `preprocessed.ipynb` cell 26 writes to a **relative** path, landing in `notebook/` | Re-running the notebook drops a stray copy instead of updating the tracked file | Use `Src.config.Preprocessed_Data_Path`; `python main.py preprocess` already does | 2026-08-27 |
 | All three notebooks hardcode `r'D:\Phone addicted\…'` | Repo runs on exactly one machine. `Src/config.py` now exists to fix this | Import the config module in cell 1 | 2026-08-23 |
 | Selection and scaling fit before the split; split unstratified | Rule violation and API blocker. **Measured cost: nil** (honest CV is 0.015–0.026 RMSE *better*). `Src/model.py` now fits both on train only and lands on the same metrics to 4 dp, so the notebook is the only remaining offender. Split still unstratified everywhere | Re-run the notebook in `Src/model.py`'s order, or have it import the module. Stratify on a binned target | 2026-08-23 |
@@ -124,9 +124,9 @@ Fixed in `377f228`.
 
 ## Recommended next 3 actions
 
-1. **Write `requirements.txt` and make a real `.venv`.** M0 has been the top blocker in all three
-   reports. Ten minutes of `pip freeze` from Python313 unblocks M8 and makes every other number in
-   this file reproducible by someone else.
+1. **Re-save `models/*.pkl`.** They now lag the code twice over — full-frame fit, pre-tuning
+   hyperparameters — so the committed artifacts and `Src/model.py` disagree about what the model is.
+   `python main.py train --save` fixes it, at the cost of overwriting tracked binaries.
 2. **Wrap the remaining two stages in the same fitted object.** The frame-relative statistics and
    single-record inference are done (`models/preprocessor.pkl`); `SelectKBest` and `StandardScaler`
    are still fit before the split and live in a second artifact. One `Pipeline` fitted on train would
