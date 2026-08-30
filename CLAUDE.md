@@ -103,9 +103,15 @@ neither, and there are no tests on either side.
 `npm --prefix frontend run <name>`, so `npm run dev` works from the repo root while `node_modules`
 and the real dependency list stay in `frontend/`. Do not add a dependency to it or run
 `npm install` at the root; that would create a second `node_modules` that shadows nothing and
-installs nothing. `npm run setup` is the forwarding install. The two `.venv` scripts it also
-carries (`api`, `serve`) invoke `.venv/Scripts/python` explicitly rather than `python`, for the
-interpreter reason above.
+installs nothing. `npm run setup` is the forwarding install.
+
+`npm run api` / `npm run serve` go through `scripts/run-api.mjs` rather than naming the interpreter
+inline. **Do not "simplify" that back to a path string.** npm runs scripts through `cmd.exe /d /s /c`
+on Windows, which rejects forward slashes in the executable position (`'.venv' is not recognized`),
+while backslashes break every POSIX shell — resolving the path in Node avoids having to pick. The
+wrapper also checks the venv exists before spawning, so a missing `.venv` says so instead of
+surfacing as a `ModuleNotFoundError` from the wrong interpreter, and it sets `cwd` to the repo root
+because the absolute `App.` and `Src.` imports resolve nowhere else.
 
 **Start the API as a package from the repo root, never as a script.** `python App/Api.py` (and
 `cd App && uvicorn Api:app`) puts `App/` on `sys.path[0]` instead of the repo root, so the absolute

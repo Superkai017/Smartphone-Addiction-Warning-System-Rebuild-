@@ -9,8 +9,8 @@
     "build": "npm --prefix frontend run build",
     "preview": "npm --prefix frontend run preview",
     "lint": "npm --prefix frontend run lint",
-    "api": ".venv/Scripts/python -m uvicorn App.Api:app --reload --port 8000",
-    "serve": ".venv/Scripts/python -m uvicorn App.Api:app --port 8000"
+    "api": "node scripts/run-api.mjs --reload",
+    "serve": "node scripts/run-api.mjs"
   },
   "engines": {
     "node": ">=20"
