@@ -23,3 +23,12 @@ seaborn==0.13.2
 jupyterlab==4.4.3
 notebook==7.4.3
 ipykernel==6.29.5
+
+# --- api --------------------------------------------------------------------
+# Previously installed in .venv but unpinned here, so a fresh clone could run
+# the pipeline and not the service. sqlalchemy backs the prediction-history
+# table in app.db (App/database.py).
+fastapi==0.141.1
+uvicorn==0.52.4
+pydantic==2.13.5
+SQLAlchemy==2.0.52

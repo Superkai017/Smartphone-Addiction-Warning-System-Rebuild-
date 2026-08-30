@@ -20,11 +20,20 @@ Two validations are deliberately *not* expressed here:
 What *is* expressed here is what the wire format can decide alone: presence,
 type, and the three divisors that must be positive because no zero-imputation
 protects them downstream.
+
+The history models at the bottom of this file serialise `App.models`
+`PredictionHistory` rows. They nest the stored inputs under `record` as a plain
+`RawRecord`, so "reload this past run into the form" is the same payload the
+frontend would POST to `/api/predict` - see `PredictionHistory.raw_record`.
 """
 
-from typing import Literal
+from datetime import datetime
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:  # import cycle at runtime: App.models imports Src, not Schemas
+    from App.models import PredictionHistory
 
 from Src.inference import BAND_LABELS, DEFAULT_MODEL, MAX_TIPS, RULES
 from Src.Preprocessed import REQUIRED_RAW_COLUMNS
@@ -174,10 +183,21 @@ class PredictionResult(BaseModel):
 class PredictResponse(BaseModel):
     """Full response for /predict. `results` is positional with `records`."""
 
+    # `model_used` would otherwise collide with pydantic's protected `model_`
+    # namespace and warn at import.
+    model_config = ConfigDict(protected_namespaces=())
+
     results: list[PredictionResult]
     count: int
     model_used: str
     tips: int
+    history_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "Primary keys of the `prediction_history` rows this call wrote, "
+            "positional with `results`. Empty when persistence is disabled."
+        ),
+    )
 
 
 class HealthResponse(BaseModel):
@@ -186,16 +206,84 @@ class HealthResponse(BaseModel):
     status: Literal["ok", "degraded"]
     model_loaded: bool
     default_model: str = DEFAULT_MODEL
-    version: str = "1.0"
+    version: str = "1.1"
 
 
 class ErrorResponse(BaseModel):
     detail: str
 
 
+# --------------------------------------------------------------------------- #
+# History
+# --------------------------------------------------------------------------- #
+class HistoryRecord(BaseModel):
+    """One persisted run: the inputs, the answer, and when it was scored.
+
+    Built with `from_row` rather than `from_attributes=True`, because the ORM
+    stores the 20 raw features as flat sibling columns while the wire format
+    nests them under `record` - that nesting is what lets the frontend post one
+    straight back to `/api/predict`.
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    id: int
+    timestamp: datetime
+    record: RawRecord = Field(
+        ..., description="The inputs, replayable as a `/api/predict` record."
+    )
+    model_name: str = Field(..., description="Which regressor produced the score.")
+    tips: int
+    prediction_score: float = Field(..., description="Predicted Addiction_Level, 1.0-10.0.")
+    band: Literal[BAND_LABELS] = Field(...)  # type: ignore[valid-type]
+    band_description: str
+    percentile: float = Field(
+        ..., description="Read alongside the band - see `PredictionResult.percentile`."
+    )
+    n_flagged: int
+    recommendations: list[Recommendation]
+
+    @classmethod
+    def from_row(cls, row: "PredictionHistory") -> "HistoryRecord":
+        return cls(
+            id=row.id,
+            timestamp=row.timestamp,
+            record=RawRecord.model_validate(row.raw_record()),
+            model_name=row.model_name,
+            tips=row.tips,
+            prediction_score=row.prediction_score,
+            band=row.band,
+            band_description=row.band_description,
+            percentile=row.percentile,
+            n_flagged=row.n_flagged,
+            recommendations=row.recommendations,
+        )
+
+
+class HistoryListResponse(BaseModel):
+    """A page of history, newest first, plus the unpaginated total."""
+
+    items: list[HistoryRecord]
+    total: int = Field(..., description="Rows matching the filter, ignoring paging.")
+    limit: int
+    offset: int
+
+
+class DeleteResponse(BaseModel):
+    """What `DELETE /api/history/{id}` and `DELETE /api/history` return."""
+
+    deleted: int = Field(..., description="How many rows were removed.")
+    id: int | None = Field(
+        default=None, description="The row deleted, for the single-record route."
+    )
+
+
 __all__ = [
+    "DeleteResponse",
     "ErrorResponse",
     "HealthResponse",
+    "HistoryListResponse",
+    "HistoryRecord",
     "MODEL_NAMES",
     "PredictRequest",
     "PredictResponse",

@@ -219,3 +219,26 @@ __marimo__/
 feature-engineer.txt
 .vscode
 best_params.json
+# The Python template's `lib/` rule above is meant for a build directory at the
+# repo root, but it matches at any depth - it was silently swallowing the whole
+# of frontend/src/lib/. Un-ignore the frontend's source tree explicitly.
+!frontend/src/lib/
+!frontend/src/lib/**
+
+# --- web ---------------------------------------------------------------------
+# Node/Vite. The frontend lives in frontend/; its build output is what FastAPI
+# serves in production (see FRONTEND_DIST in App/Api.py).
+node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+yarn-error.log*
+.vite/
+
+# --- api database ------------------------------------------------------------
+# SQLite prediction history, created on first startup by App/database.init_db.
+# User data, and reproducible from an empty file - never committed.
+app.db
+app.db-journal
+app.db-wal
+app.db-shm

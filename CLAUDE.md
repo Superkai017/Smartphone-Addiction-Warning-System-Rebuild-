@@ -5,16 +5,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project state
 
 Read this first: **`README.md` describes the intended end state, not the current one.** As of
-2026-08-30 the repo holds three Jupyter notebooks, a six-module `Src/` package, a three-module
-`App/` FastAPI package, two CSVs, five pickled artifacts and one JSON artifact in `models/`. There
-is still **no frontend, no tests, and no Docker**, and `requirements.txt` does not yet pin
-`fastapi`/`uvicorn`. Do not assume any component the README lists exists until you have verified it
-on disk.
+2026-08-30 the repo holds three Jupyter notebooks, a six-module `Src/` package, a six-module `App/`
+FastAPI package, a `frontend/` React app, two CSVs, five pickled artifacts and one JSON artifact in
+`models/`. There are still **no tests and no Docker**. Do not assume any component the README lists
+exists until you have verified it on disk.
 
 Current pipeline stage: **EDA → preprocessing → modelling through tuned ensembles, with rf/gb/xgb
 serialized to `models/`, a calibrated warning layer (`Src/inference.py`) that turns a score into a
-band, a cohort percentile and ranked advice, and a FastAPI service over it (`App/`) exposing
-`/health`, `/models` and `/predict`. The frontend is the next unstarted milestone.**
+band, a cohort percentile and ranked advice, a FastAPI service over it (`App/`) exposing `/api/*`
+and persisting every scored request to SQLite, and a React/Vite frontend (`frontend/`) that calls
+it. Tests and packaging are the next unstarted milestones.**
 
 `PROJECT_STATUS.md` carries the detailed milestone table, the measured metrics, and the open-risk
 register. It is more current than this file — read it before planning work, and update it when you
@@ -75,7 +75,19 @@ python main.py score 7 --model xgb --tips 5
 python main.py all
 
 # Serve the same scoring path over HTTP. Interactive docs at /docs
-.venv/Scripts/python -m uvicorn App.Api:app --reload
+.venv/Scripts/python -m uvicorn App.Api:app --reload --port 8000
+
+# The React UI. Separate terminal, from frontend/. Vite proxies /api to :8000,
+# so the backend above must be running or every panel reports it cannot score.
+cd frontend && npm install && npm run dev      # http://localhost:3000
+
+# Production shape: build once, then uvicorn alone serves both the API and the
+# bundle from one origin - App/Api.py mounts frontend/dist when it exists.
+cd frontend && npm run build
+.venv/Scripts/python -m uvicorn App.Api:app --port 8000   # UI at /, docs at /docs
+
+# Typecheck the frontend. There is no test command on either side yet.
+cd frontend && npm run lint
 
 # Run notebooks
 jupyter lab notebook/
@@ -84,7 +96,8 @@ jupyter lab notebook/
 jupyter nbconvert --to notebook --execute --inplace notebook/preprocessed.ipynb
 ```
 
-There is no build, lint, or test command yet.
+The frontend has a build (`npm run build`) and a typecheck (`npm run lint`). The Python side has
+neither, and there are no tests on either side.
 
 **Start the API as a package from the repo root, never as a script.** `python App/Api.py` (and
 `cd App && uvicorn Api:app`) puts `App/` on `sys.path[0]` instead of the repo root, so the absolute
@@ -92,9 +105,15 @@ There is no build, lint, or test command yet.
 `python -m uvicorn App.Api:app` from the root resolves both packages. The `App/` modules therefore
 have no `if __name__ == "__main__"` block — same rule `main.py` already enforces for `Src/`.
 
-`fastapi`, `uvicorn` and `pydantic` are installed in `.venv` (0.141.1 / 0.52.4 / 2.13.5) but are
-**not in `requirements.txt`** — a fresh clone installs the pipeline and cannot start the API. Pin
-them before packaging.
+`fastapi`, `uvicorn`, `pydantic` and `SQLAlchemy` are now pinned in `requirements.txt` alongside the
+pipeline deps, so a fresh clone can start the service. The frontend's dependencies are separate
+(`frontend/package.json`, npm) and are not installed by `pip install -r requirements.txt`.
+
+**The history database needs no migration step.** `App/database.init_db` runs `create_all` from the
+FastAPI `lifespan`, so `app.db` and its table appear on first startup. `create_all` is additive: it
+creates what is missing and will **not** alter an existing table. Changing a column on
+`PredictionHistory` therefore means deleting `app.db` (losing the history) or introducing Alembic —
+`create_all` will silently leave the old shape in place otherwise. `app.db` is gitignored.
 
 **Run notebooks top to bottom before trusting any number in them.** Non-linear execution order
 previously hid a real defect: a `copy_X: [True, False]` entry in the Ridge/Lasso grids made
@@ -123,11 +142,27 @@ new record (dict / DataFrame)
             └─ models/thresholds.json   band cuts + rule thresholds + quantile grids
 
 HTTP request
-  └─ App/Api.py        FastAPI app: /health, /models, /predict
+  └─ App/Api.py        FastAPI app: /api/{health,models,rules,predict,history}
        ├─ App/Schemas.py       pydantic models mirroring Scorer.score's payload
-       └─ App/dependencies.py  lru_cache'd Scorer.load() per model name
-            └─ Src/inference.py  ← the same Scorer the CLI's `score` uses
+       ├─ App/dependencies.py  lru_cache'd Scorer.load() per model name
+       │    └─ Src/inference.py  ← the same Scorer the CLI's `score` uses
+       └─ App/crud.py          persistence, called after a successful score
+            └─ App/models.py   PredictionHistory ORM
+                 └─ App/database.py  engine + SessionLocal → app.db (SQLite)
+
+browser
+  └─ frontend/src/lib/api.ts   the only module that calls the backend
+       └─ frontend/src/App.tsx  debounced POST /api/predict per form edit
+            ├─ components/RiskResultCard.tsx   score, band, percentile, ranked tips
+            ├─ components/HistoryPanel.tsx     GET/DELETE /api/history
+            ├─ components/WhatIfSimulator.tsx  batch of 2, persist=false
+            ├─ components/BatchScorer.tsx      5 profiles in one request
+            └─ components/CohortBenchmarkView.tsx  GET /api/rules
 ```
+
+`frontend/src/lib/catalog.ts` holds display copy only — labels, units, categories, chart colours.
+Every *number* it would have needed comes from the API: cut points from `/api/rules`, scores from
+`/api/predict`. That split is deliberate, and the reason is in the next section.
 
 `preprocessed_data.csv` keeps `Age`, `Gender`, `Daily_Usage_Hours` and the target `Addiction_Level`
 as raw columns, plus **24 engineered features**. The other 18 raw predictors (`Sleep_Hours`,
@@ -261,9 +296,26 @@ not the arithmetic, and `preprocess(raw)` still reproduces the committed CSV exa
   JSON-ready dicts, so the handlers only choose a model, cap the tip count and map exceptions to
   status codes. Product logic belongs in `Src/`, where `python main.py score` exercises the same
   path — if a rule, a threshold or a wording change is about to land in `App/`, it is in the wrong
-  file. The three modules split as: `Schemas.py` the wire format (importing `BAND_LABELS`,
+  file. The six modules split as: `Schemas.py` the wire format (importing `BAND_LABELS`,
   `DEFAULT_MODEL`, `MAX_TIPS`, `RULES` from `Src.inference` so it cannot drift), `dependencies.py`
-  the `lru_cache`d artifact loading, `Api.py` the routes.
+  the `lru_cache`d artifact loading, `Api.py` the routes, and `database.py` / `models.py` /
+  `crud.py` the SQLite history. Persistence is infrastructure, not product logic — `crud.py` takes
+  a result dict and stores it, and never scores anything.
+- **`PredictionHistory`'s input columns use the raw feature names**, `Daily_Usage_Hours` rather than
+  `daily_usage_hours`, breaking PEP 8 on purpose. It makes the round trip free: a stored row's
+  inputs are already a valid `/api/predict` payload, so the UI's "reload this run into the form" is
+  a dict copy instead of a mapping table that has to track `REQUIRED_RAW_COLUMNS`. An import-time
+  check in `App/models.py` enforces that every required raw column really is a column.
+- **A failed history write is not an error.** `/api/predict` returns the scores with an empty
+  `history_ids` and logs the exception. The prediction is the product; the history is a
+  convenience, and a locked or missing SQLite file must not turn a correct answer into a 500.
+- **The frontend never computes a prediction.** It was doing exactly that before this refactor —
+  `server/engine.ts` reimplemented feature engineering and then *approximated* the estimators with
+  hand-written linear formulas, so every number the UI displayed was invented rather than read from
+  `models/*.pkl`. It also carried its own copy of the 14 rule thresholds, already stale against
+  `thresholds.json`. Both are gone. `frontend/src/lib/api.ts` is the only module that talks to the
+  backend, and `catalog.ts` holds copy with no numbers in it. Keep that boundary: a formula or a
+  threshold appearing anywhere under `frontend/` is a bug, not a shortcut.
 - **The API's error mapping is deliberate, not incidental.** `ValueError` → **422**: the two checks
   the wire format cannot make (`Gender` must be a class the stored `LabelEncoder` saw,
   `School_Grade` must carry a year number) are properties of `models/preprocessor.pkl`, so

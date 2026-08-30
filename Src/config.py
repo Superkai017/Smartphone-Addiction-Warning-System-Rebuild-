@@ -32,3 +32,9 @@ TEST_SIZE    = 0.2
 # artifact in `models/`. Lives here rather than in `Src/model.py` so `main.py`
 # can read it without importing xgboost.
 K_BEST = 18
+
+# SQLite file backing the API's prediction history. Resolved against the repo
+# root rather than the process cwd: `sqlite:///./app.db` would create a
+# *different* database depending on where uvicorn was launched from, and the
+# history tab would silently come back empty. Gitignored - it is user data.
+Database_Path = Project_Root / "app.db"
