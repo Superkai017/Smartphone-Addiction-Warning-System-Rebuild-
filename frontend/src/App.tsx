@@ -21,6 +21,17 @@ import type { ModelType, PredictionResult, RawRecord } from './types';
  */
 const DEBOUNCE_MS = 400;
 
+/**
+ * How often the app re-probes a backend it believes is down.
+ *
+ * The mount probe runs once and the scoring effect only reruns when the form
+ * changes, so without this a tab opened before `uvicorn` started showed the
+ * "unreachable" banner forever - starting the backend did nothing to a page
+ * that had stopped asking. Polling only while `apiHealthy` is false keeps a
+ * healthy session at zero extra requests.
+ */
+const HEALTH_RETRY_MS = 5000;
+
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabKey>('assessment');
   const [record, setRecord] = useState<RawRecord>(DEFAULT_RECORD);
@@ -40,23 +51,58 @@ export const App: React.FC = () => {
    */
   const [historyVersion, setHistoryVersion] = useState<number>(0);
 
+  /**
+   * Bumped when a backend that was believed down starts answering, so the
+   * scoring effect below reruns. Clearing the banner is not enough on its own:
+   * the result card would go on showing the failure until something in
+   * `[record, selectedModel, tipLimit]` happened to change.
+   */
+  const [backendEpoch, setBackendEpoch] = useState<number>(0);
+
   // Which request is current. A slow response for an older record must not
   // overwrite the result of a newer one.
   const requestId = useRef(0);
 
+  /**
+   * Ask the backend what it is and what it can serve.
+   *
+   * Shared by the mount probe and the retry loop, because a backend that
+   * appears late has to answer both questions: the banner needs `model_loaded`,
+   * and `ModelSelector` needs the real `available` list rather than the `['gb']`
+   * placeholder this component starts with.
+   */
+  const probeBackend = useCallback(async () => {
+    const [health, models] = await Promise.all([getHealth(), getModels()]);
+    return {
+      healthy: health.status === 'ok' && health.model_loaded,
+      available: models.available,
+      fallback: models.default,
+    };
+  }, []);
+
+  const applyProbe = useCallback(
+    (probe: {
+      healthy: boolean;
+      available: ModelType[];
+      fallback: ModelType;
+    }) => {
+      setApiHealthy(probe.healthy);
+      setAvailableModels(probe.available);
+      // Fall back to whatever the server can actually serve if the default
+      // model has no artifact in this deployment.
+      setSelectedModel((current) =>
+        probe.available.includes(current) ? current : probe.fallback,
+      );
+    },
+    [],
+  );
+
   useEffect(() => {
     let cancelled = false;
 
-    Promise.all([getHealth(), getModels()])
-      .then(([health, models]) => {
-        if (cancelled) return;
-        setApiHealthy(health.status === 'ok' && health.model_loaded);
-        setAvailableModels(models.available);
-        // Fall back to whatever the server can actually serve if the default
-        // model has no artifact in this deployment.
-        setSelectedModel((current) =>
-          models.available.includes(current) ? current : models.default,
-        );
+    probeBackend()
+      .then((probe) => {
+        if (!cancelled) applyProbe(probe);
       })
       .catch(() => {
         if (!cancelled) setApiHealthy(false);
@@ -65,7 +111,36 @@ export const App: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [probeBackend, applyProbe]);
+
+  // While the backend looks down, keep asking. The effect re-runs when
+  // `apiHealthy` flips and returns early once it is true, so the interval
+  // stops itself the moment the backend answers - there is no polling at all
+  // in the normal case.
+  useEffect(() => {
+    if (apiHealthy) return;
+
+    let cancelled = false;
+
+    const timer = setInterval(() => {
+      probeBackend()
+        .then((probe) => {
+          // Only a backend that is up *and* holds its artifacts clears the
+          // banner; one whose `warm()` failed is still unable to score.
+          if (cancelled || !probe.healthy) return;
+          applyProbe(probe);
+          setBackendEpoch((v) => v + 1);
+        })
+        .catch(() => {
+          // Still down. The interval is the retry, so there is nothing to do.
+        });
+    }, HEALTH_RETRY_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [apiHealthy, probeBackend, applyProbe]);
 
   // Score the current record, debounced. Assessment results are persisted -
   // this is the tab whose runs the history tab is meant to list.
@@ -99,7 +174,7 @@ export const App: React.FC = () => {
     }, DEBOUNCE_MS);
 
     return () => clearTimeout(timer);
-  }, [record, selectedModel, tipLimit]);
+  }, [record, selectedModel, tipLimit, backendEpoch]);
 
   const handleApplyPreset = useCallback((preset: string) => {
     const next = PRESETS[preset as PresetKey];
