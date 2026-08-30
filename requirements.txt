@@ -1,0 +1,25 @@
+# Pinned to the versions this project is known to run on: Python 3.13.9,
+# the interpreter the `venv` Jupyter kernel actually points at.
+#
+#     python -m venv .venv
+#     .venv/Scripts/activate          # Windows;  source .venv/bin/activate on Linux/macOS
+#     pip install -r requirements.txt
+#
+# NOTE: `python` on PATH may be a different interpreter with none of this
+# installed - check `python -c "import sys; print(sys.executable)"` before
+# blaming the code for a ModuleNotFoundError.
+
+# --- pipeline ---------------------------------------------------------------
+pandas==2.2.3
+numpy==2.2.4
+scikit-learn==1.6.1
+scipy==1.15.2            # pulled in by scikit-learn; used directly in modelling.ipynb
+joblib==1.4.2            # artifact (de)serialisation in Src/Preprocessed.py and Src/model.py
+xgboost==3.1.2
+
+# --- notebooks --------------------------------------------------------------
+matplotlib==3.10.1
+seaborn==0.13.2
+jupyterlab==4.4.3
+notebook==7.4.3
+ipykernel==6.29.5

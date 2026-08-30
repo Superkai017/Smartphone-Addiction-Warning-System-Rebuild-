@@ -1,6 +1,0 @@
-{
-  "name": "Smartphone Addiction Warning System",
-  "description": "Real-time AI behavioral risk prediction, cohort percentile benchmarking, and actionable habit intervention system for teen smartphone usage.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
