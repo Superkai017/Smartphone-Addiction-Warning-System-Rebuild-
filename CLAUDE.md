@@ -77,17 +77,17 @@ python main.py all
 # Serve the same scoring path over HTTP. Interactive docs at /docs
 .venv/Scripts/python -m uvicorn App.Api:app --reload --port 8000
 
-# The React UI. Separate terminal, from frontend/. Vite proxies /api to :8000,
-# so the backend above must be running or every panel reports it cannot score.
-cd frontend && npm install && npm run dev      # http://localhost:3000
+# The React UI. Separate terminal. Vite proxies /api to :8000, so the backend
+# above must be running or every panel reports it cannot score.
+npm run setup && npm run dev            # http://localhost:3000
 
 # Production shape: build once, then uvicorn alone serves both the API and the
 # bundle from one origin - App/Api.py mounts frontend/dist when it exists.
-cd frontend && npm run build
-.venv/Scripts/python -m uvicorn App.Api:app --port 8000   # UI at /, docs at /docs
+npm run build
+npm run serve                           # UI at /, docs at /docs
 
 # Typecheck the frontend. There is no test command on either side yet.
-cd frontend && npm run lint
+npm run lint
 
 # Run notebooks
 jupyter lab notebook/
@@ -98,6 +98,14 @@ jupyter nbconvert --to notebook --execute --inplace notebook/preprocessed.ipynb
 
 The frontend has a build (`npm run build`) and a typecheck (`npm run lint`). The Python side has
 neither, and there are no tests on either side.
+
+**The root `package.json` declares no dependencies — it only forwards.** Every script in it is
+`npm --prefix frontend run <name>`, so `npm run dev` works from the repo root while `node_modules`
+and the real dependency list stay in `frontend/`. Do not add a dependency to it or run
+`npm install` at the root; that would create a second `node_modules` that shadows nothing and
+installs nothing. `npm run setup` is the forwarding install. The two `.venv` scripts it also
+carries (`api`, `serve`) invoke `.venv/Scripts/python` explicitly rather than `python`, for the
+interpreter reason above.
 
 **Start the API as a package from the repo root, never as a script.** `python App/Api.py` (and
 `cd App && uvicorn Api:app`) puts `App/` on `sys.path[0]` instead of the repo root, so the absolute

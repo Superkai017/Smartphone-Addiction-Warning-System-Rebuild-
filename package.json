@@ -1,0 +1,18 @@
+{
+  "name": "smartphone-addiction-warning-system",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Root convenience wrapper. The frontend is a self-contained package in frontend/ - this file only forwards to it so `npm run dev` works from the repo root. It declares no dependencies of its own; frontend/package.json owns them, and node_modules lives there.",
+  "scripts": {
+    "setup": "npm --prefix frontend install",
+    "dev": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "preview": "npm --prefix frontend run preview",
+    "lint": "npm --prefix frontend run lint",
+    "api": ".venv/Scripts/python -m uvicorn App.Api:app --reload --port 8000",
+    "serve": ".venv/Scripts/python -m uvicorn App.Api:app --port 8000"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
