@@ -1,12 +1,14 @@
-# Project Status — 2026-08-28
+# Project Status — 2026-08-30
 
 **Stage:** Preprocessing complete and importable; modelling extended with a full evaluation suite;
 three models serialized to `models/`; the warning layer (band + percentile + calibrated advice) built
-and verified as `Src/inference.py`. M6 has everything except the HTTP service.
-**Head:** `42857a1` · **Since last review:** 5 commits (`beb634b..42857a1`) plus this review's own changes
+and verified as `Src/inference.py`; **M6 closed — the FastAPI service over it is live and exercised
+end to end** (`App/`: `/health`, `/models`, `/predict`).
+**Head:** `3c18d94` · **Since the 2026-08-28 baseline:** 20 commits (`42857a1..3c18d94`), plus this review's rewrite of `App/Api.py` and `App/Schemas.py` in the working tree
 **Health:** 🟢 on track — the pipeline is reproducible from committed code in two independent
-implementations, and the leakage question that has been open since 2026-08-23 is now measured rather
-than assumed.
+implementations, the leakage question that has been open since 2026-08-23 is now measured rather
+than assumed, and the scoring path is reachable over HTTP. One new packaging gap: `fastapi` and
+`uvicorn` are not in `requirements.txt`.
 
 ## Movement since last review
 
@@ -40,11 +42,11 @@ than assumed.
 | M3 | Split & scaling | 🟡 In progress | Order still inverted — `SelectKBest`/`StandardScaler` fit on the full frame (cells 7–8) before `train_test_split` (cell 9). Now measured: honest CV is *better* than the reported split, so the cost is nil. Split still unstratified. |
 | M4 | Baseline model | 🟢 Done | Re-verified 2026-08-28 by reloading the pickles and reproducing the split: rf **0.5111 / R² 0.797**, gb **0.2798 / 0.889**, xgb **0.2578 / 0.898**. After the 2026-08-29 grid search `Src/model.py` scores rf **0.5113 / 0.797**, gb **0.2675 / 0.894**, xgb **0.2478 / 0.902**, and the pickles in `models/` now hold exactly that — reloaded and round-tripped to the same four decimals after `train --save`. Mean-baseline row present in cell 19. |
 | M5 | Model selection | 🟢 Done | xgb best. Capacity sweep (cell 20) says no simpler config wins in any family: rf depth-10 +0.021 RMSE, gb lr-0.05 +0.048. Learning curves, residual diagnostics and permutation importance all committed. `Src/tuning.py` (2026-08-29) makes the searches behind the hyperparameters re-runnable — 1189 candidates, 5945 fits, over a `Pipeline` so each fold refits selection and scaling. |
-| M6 | Inference API | 🟡 Scaffolded | **The library behind the API is complete** (2026-08-29). `Src/Preprocessed.py` splits `fit`/`transform` and persists the frame-relative statistics; `Src/inference.py` adds the warning layer — `Scorer.load()` once at startup, `Scorer.score(record)` per request, returning `{score, band, band_description, percentile, model, n_flagged, recommendations}` as JSON-ready dicts. Every threshold is calibrated from the data into `models/thresholds.json`, not hardcoded. Exercised without a web layer via `python main.py score 7 --json`. **Still no FastAPI app** — that is now the only thing between here and M6 done. |
-| M7 | Frontend | ⚪ Not started | — |
-| M8 | Packaging | ⚪ Not started | Depends on M0. |
+| M6 | Inference API | 🟢 Done | **Closed 2026-08-30.** `App/` is a three-module FastAPI package over `Src/inference.Scorer`: `Schemas.py` (wire format, constants imported from `Src.inference` so it cannot drift), `dependencies.py` (`lru_cache`d `Scorer.load` per model name, `warm()` in `lifespan`), `Api.py` (`GET /health`, `GET /models`, `POST /predict`). Verified against the real artifacts this review — health `{"status":"ok","model_loaded":true,"default_model":"gb"}`, `/models` `{"available":["rf","gb","xgb"]}`, `/predict` 200 on the schema's own example (score **10.0 / "Severe" / 75.0th percentile**, 5 of 14 rules flagged, 3 returned) and on a 200-row batch of the raw CSV, `model="xgb"` + `tips=5` honoured, `Gender="Nonbinary"` → **422** carrying `validate_raw`'s message, `Sleep_Hours=0` and `records=[]` → **422** field-level from pydantic. Booted under real uvicorn (`python -m uvicorn App.Api:app`) and served `/health`. fastapi 0.141.1 / uvicorn 0.52.4 / pydantic 2.13.5. |
+| M7 | Frontend | ⚪ Not started | Now unblocked — `/predict` returns the full payload a UI needs. |
+| M8 | Packaging | ⚪ Not started | Depends on M0. Newly blocked on `requirements.txt`, which does not pin `fastapi`/`uvicorn`/`pydantic`. |
 
-Top-level directories: `data/`, `notebook/`, `models/`, `Src/`.
+Top-level directories: `data/`, `notebook/`, `models/`, `Src/`, `App/`.
 
 ## Verified findings this review
 
@@ -108,8 +110,10 @@ Fixed in `377f228`.
 | Risk | Impact | Cheapest fix | First seen |
 |------|--------|--------------|-----------|
 | ~~**Single-record inference still impossible.**~~ **Closed 2026-08-29.** `fit`/`transform` split in `Src/Preprocessed.py`; the gender classes, zero-fill means and affect moments now persist to `models/preprocessor.pkl` and are replayed by `preprocess_new()` | Was: M6 cannot score one teenager, which is the entire product | Done. Residual: `models/preprocessor.pkl` must be refit alongside any formula change, and it is a plain dict rather than a `Pipeline` | 2026-08-27 |
-| ~~**Severity bands put 64% of the data in "Severe"**, 1.4% in "Normal"~~ **Partly closed 2026-08-29.** Cuts now come from the 1476 non-ceiling rows (`[6.7, 8.0, 9.0]`), fixing the bottom three bands: 11.3 / 11.9 / 13.8% of predictions vs 1.2 / 5.8 / 30.1% before | The top band is **still 63%** and no absolute cut point can change that — it is ceiling censoring in the source data. Mitigated, not solved: `percentile` is now returned alongside the band and separates a 37th-percentile "Severe" from a 75th | Remaining fix is upstream — censored regression or a two-stage model. Do not chase it with more thresholds | 2026-08-28 |
+| ~~**Severity bands put 64% of the data in "Severe"**, 1.4% in "Normal"~~ **Partly closed 2026-08-29.** Cuts now come from the 1476 non-ceiling rows (`[6.7, 8.0, 9.0]`), fixing the bottom three bands: 11.3 / 11.9 / 13.8% of predictions vs 1.2 / 5.8 / 30.1% before | The top band is **still 63%** and no absolute cut point can change that — it is ceiling censoring in the source data. Mitigated, not solved: `percentile` is now returned alongside the band and separates a 37th-percentile "Severe" from a 75th. **Seen live over HTTP 2026-08-30:** the first 200 raw rows scored through `/predict` come back **63.5% "Severe"**, and the mildest of those sits at the **37.3rd percentile** — a below-median teenager labelled with the worst band. Any frontend must render the percentile, not just the band | Remaining fix is upstream — censored regression or a two-stage model. Do not chase it with more thresholds | 2026-08-28 |
 | ~~**Recommendation thresholds are uncalibrated** and fired 14/14 on the demo sample~~ **Closed 2026-08-29.** Thresholds are q75/q25 of each feature, written to `models/thresholds.json` by `main.py calibrate`. Worse than "uncalibrated" on inspection: `Academic_Per_Usage < 0.2` was **dead code** (feature runs 11–29, fired 0.0%) and `Weekend_Ratio > 0.6` fired on **90.6%**. All 14 rules now fire on 23.5–25.6%; tips are ranked by cohort percentile and capped at 3 (median 3 flagged, max 9, never 14) | Was: advice generic, every user saw nearly every tip | Done. Residual: rule thresholds are feature quantiles, so they go stale on any preprocessing-formula change — recalibrate alongside `preprocessor.pkl` | 2026-08-28 |
+| **`requirements.txt` does not pin `fastapi`, `uvicorn` or `pydantic`** | A fresh clone installs the pipeline and then cannot start the API — the manifest no longer describes the project. M8 blocker, and the same class of failure M0 closed on 2026-08-29 | Add the three pins at the versions `.venv` runs (`fastapi==0.141.1`, `uvicorn==0.52.4`, `pydantic==2.13.5`) under a `# --- api ---` heading | 2026-08-30 |
+| **The API has no tests**, and neither does anything else | `/predict` was verified by hand this review; nothing re-checks that the schema still matches `Scorer.score`'s payload, or that a bad `Gender` still yields 422 rather than 500. `Schemas.py` importing its constants from `Src.inference` prevents *constant* drift, not shape drift | A `TestClient` smoke test over the four cases already exercised by hand. It needs no network and no fixtures — the artifacts are committed | 2026-08-30 |
 | **Preprocessing now exists twice** — `notebook/preprocessed.ipynb` and `Src/Preprocessed.py` | They agree today (verified). Nothing enforces that they keep agreeing, and a silent divergence means the model is trained on something other than what the API computes | A test asserting the module reproduces the committed CSV; eventually have the notebook import the module rather than restate it | 2026-08-28 |
 | ~~**Model-save cell (c29) is commented out**, as is the tuning cell (c14).~~ **Closed 2026-08-29.** `main.py train --save` is c29; `Src/tuning.py` is c12+c14, runnable on demand. Its `models/best_params.json` is gitignored, so the tracked record of the search is the constants in `Src/model.py` plus their before/after CV numbers | Was: the artifacts in `models/` had no committed code that reproduces them, and the searches behind the hyperparameters were folklore | Done, and as of 2026-08-29 `--save` has been run: the committed pickles *are* the train-only tuned fit | 2026-08-27 |
 | ~~`.replace(0, mean)` applied to `Parental_Control`, a **binary 0/1 flag** with 1478 zeros (49.3%)~~ **Closed 2026-08-29.** Excluded from `ZERO_AS_MISSING`; CSV, `preprocessor.pkl`, `preprocessing.pkl`, `model_*.pkl` and `thresholds.json` all regenerated, notebook mirrored and re-executed | **The stated impact was wrong and is corrected here.** Imputation mapped the flag to {0.5073, 1}, so `1 − PC` became {0.4927, 0} = **exactly 0.492667 × the correct {1, 0}**. A positive scalar multiple is invisible to `StandardScaler` and `f_regression`, so no model ever saw it: post-fix `evaluate` reproduces every metric to 4 dp and `SelectKBest` keeps the same 18 with an identical F of 97.572. The real damage was semantic — `Unsupervised_Usage` held 0.49 × hours, so the calibrated advice threshold was in fabricated units (2.4633 → **5.0000** real hours) | Done | 2026-08-27 |
@@ -124,21 +128,45 @@ Fixed in `377f228`.
 
 ## Recommended next 3 actions
 
-1. **Decide what to do about `model_rf.pkl`.** The retrain landed and it grew **5.8 MB → 17 MB**
-   (tuned rf is 300 trees at unlimited depth), taking `models/` to 18 MB. rf is also the *worst* of
-   the three (MSE 0.5113 vs gb 0.2675, xgb 0.2478) and is not what the API serves. Either stop
-   committing it, or move the binaries to LFS before this becomes routine.
-2. **Wrap the remaining two stages in the same fitted object.** The frame-relative statistics and
-   single-record inference are done (`models/preprocessor.pkl`); `SelectKBest` and `StandardScaler`
-   are still fit before the split and live in a second artifact. One `Pipeline` fitted on train would
-   close the leakage rule violation and leave the API with a single file to load.
-3. **Fix `Parental_Control`.** Still a genuine semantic error every model inherits — and now it also
-   reaches the advice layer: mean-imputing the binary flag leaves `Unsupervised_Usage` at exactly
-   0.000 for half the cohort, so its q75 threshold (2.4633) is calibrated against a distribution
-   that is half artifact. Exclude it from `ZERO_AS_MISSING`, re-run `preprocess`, `train --save` and
-   `calibrate --save` in that order. (Re-banding is done — see the closed risk above.)
+1. **Pin `fastapi`, `uvicorn` and `pydantic` in `requirements.txt`.** One-line-each fix for a
+   manifest that no longer installs the project it describes, and the cheapest of the three.
+2. **Add a `TestClient` smoke test** over the four cases verified by hand this review (health,
+   `/models`, a 200 predict, a 422 on unseen `Gender`). This is the repo's first test, so it also
+   settles where tests live and how they run — and it is the only thing that will catch
+   `Schemas.py` drifting from `Scorer.score`'s payload shape after a preprocessing change.
+3. **Stop mean-imputing the remaining genuine zeros** (`Exercise_Hours` 366 rows,
+   `Social_Interactions` 257, `Time_on_Education` 250). This is the last open *data* defect and,
+   unlike `Parental_Control`, it is not a rescale — the fitted models and every metric will move.
+   Restrict replacement to `Daily_Usage_Hours`, then re-run `preprocess` → `train --save` →
+   `calibrate --save` in that order. (`model_rf.pkl`'s 17 MB and folding selection/scaling into one
+   `Pipeline` both remain open — see the risk table — but neither blocks a user-facing improvement.)
 
 ## Review log
+- 2026-08-30 — **M6 closed: the FastAPI service is live.** Started from a
+  `ModuleNotFoundError: No module named 'App'`, which turned out to be two faults stacked. The
+  reported one is invocation, not code: `python App/Api.py` puts `App/` on `sys.path[0]` instead of
+  the repo root, so the absolute `App.` and `Src.` imports cannot resolve — only
+  `python -m uvicorn App.Api:app` from the root works, and that is now recorded in CLAUDE.md.
+  Fixing it exposed the second: `Api.py` as committed in `3c18d94` was generic **classification**
+  boilerplate (`predict_proba`, a hardcoded `0.5` threshold) importing `model, preprocessor,
+  thresholds` from `App/dependencies.py`, which exports neither — none of the three names exist, and
+  the project does regression plus post-hoc banding anyway. `Schemas.py` was the same boilerplate
+  and had to go with it — a `PredictRequest` of `{data, threshold}` and a `PredictionResult` of
+  `{prediction, probability, label}`, which describe a classifier this repo does not contain, so
+  `/predict` raised `AttributeError: 'PredictRequest' object has no attribute 'model'` rather than
+  answering. Both rewritten against `dependencies.py`: `lifespan` calls `warm()`, `/predict` scores
+  the whole batch in one `Scorer.score` call, `ValueError` → 422 and
+  `FileNotFoundError`/`ImportError` → 503, `/health` never raises, and a new `/models` probes what
+  actually loads so a caller finds an absent `xgboost` there rather than through a 503. `Schemas.py`
+  now imports `BAND_LABELS`, `DEFAULT_MODEL`, `MAX_TIPS` and `RULES` from `Src.inference` and
+  asserts its `RawRecord` covers `REQUIRED_RAW_COLUMNS` at import time, so a pipeline column added
+  later fails at startup rather than as a 422 on every request. Verified against the committed artifacts: the schema's example
+  record returns **10.0 / "Severe" / 75.0th percentile** with 5 of 14 rules flagged and 3 returned;
+  `Gender="Nonbinary"` → 422 carrying `validate_raw`'s own message; `Sleep_Hours=0` → 422 caught
+  field-level by pydantic; real uvicorn boots and serves `/health`. A 200-row batch bands **63.5% "Severe"**, the
+  mildest at the 37.3rd percentile — **the ceiling-censoring risk showing up in a user-facing
+  response**, logged against that row.
+  New gap: `requirements.txt` still pins only the pipeline, so a fresh clone cannot start the API.
 - 2026-08-29 — **`Parental_Control` excluded from `ZERO_AS_MISSING`**, and the repo's own account of
   why that mattered turned out to be wrong. The imputation was an *exact positive rescale* of
   `Unsupervised_Usage` (×0.492667), which `StandardScaler` and `f_regression` cannot see: post-fix

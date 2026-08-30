@@ -5,15 +5,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project state
 
 Read this first: **`README.md` describes the intended end state, not the current one.** As of
-2026-08-29 the repo holds three Jupyter notebooks, a six-module `Src/` package, two CSVs, five
-pickled artifacts and one JSON artifact in `models/`. There is still **no API, no frontend, no
-tests, and no Docker**. Do not assume any component the README lists exists until you have verified
-it on disk.
+2026-08-30 the repo holds three Jupyter notebooks, a six-module `Src/` package, a three-module
+`App/` FastAPI package, two CSVs, five pickled artifacts and one JSON artifact in `models/`. There
+is still **no frontend, no tests, and no Docker**, and `requirements.txt` does not yet pin
+`fastapi`/`uvicorn`. Do not assume any component the README lists exists until you have verified it
+on disk.
 
 Current pipeline stage: **EDA → preprocessing → modelling through tuned ensembles, with rf/gb/xgb
-serialized to `models/`, and a calibrated warning layer (`Src/inference.py`) that turns a score into
-a band, a cohort percentile and ranked advice. The HTTP layer is the next unstarted milestone — the
-library behind it is done.**
+serialized to `models/`, a calibrated warning layer (`Src/inference.py`) that turns a score into a
+band, a cohort percentile and ranked advice, and a FastAPI service over it (`App/`) exposing
+`/health`, `/models` and `/predict`. The frontend is the next unstarted milestone.**
 
 `PROJECT_STATUS.md` carries the detailed milestone table, the measured metrics, and the open-risk
 register. It is more current than this file — read it before planning work, and update it when you
@@ -73,6 +74,9 @@ python main.py score 7 --model xgb --tips 5
 # preprocess -> train -> evaluate in one go (tuning and calibration are deliberately excluded)
 python main.py all
 
+# Serve the same scoring path over HTTP. Interactive docs at /docs
+.venv/Scripts/python -m uvicorn App.Api:app --reload
+
 # Run notebooks
 jupyter lab notebook/
 
@@ -81,6 +85,16 @@ jupyter nbconvert --to notebook --execute --inplace notebook/preprocessed.ipynb
 ```
 
 There is no build, lint, or test command yet.
+
+**Start the API as a package from the repo root, never as a script.** `python App/Api.py` (and
+`cd App && uvicorn Api:app`) puts `App/` on `sys.path[0]` instead of the repo root, so the absolute
+`App.` and `Src.` imports fail with `ModuleNotFoundError: No module named 'App'`. Only
+`python -m uvicorn App.Api:app` from the root resolves both packages. The `App/` modules therefore
+have no `if __name__ == "__main__"` block — same rule `main.py` already enforces for `Src/`.
+
+`fastapi`, `uvicorn` and `pydantic` are installed in `.venv` (0.141.1 / 0.52.4 / 2.13.5) but are
+**not in `requirements.txt`** — a fresh clone installs the pipeline and cannot start the API. Pin
+them before packaging.
 
 **Run notebooks top to bottom before trusting any number in them.** Non-linear execution order
 previously hid a real defect: a `copy_X: [True, False]` entry in the Ridge/Lasso grids made
@@ -107,6 +121,12 @@ new record (dict / DataFrame)
   └─ preprocess_new()  → 27 engineered cols → to_model_matrix() → 18 scaled cols → model.predict
        └─ Src/inference.py  Scorer.score() → {score, band, percentile, recommendations}
             └─ models/thresholds.json   band cuts + rule thresholds + quantile grids
+
+HTTP request
+  └─ App/Api.py        FastAPI app: /health, /models, /predict
+       ├─ App/Schemas.py       pydantic models mirroring Scorer.score's payload
+       └─ App/dependencies.py  lru_cache'd Scorer.load() per model name
+            └─ Src/inference.py  ← the same Scorer the CLI's `score` uses
 ```
 
 `preprocessed_data.csv` keeps `Age`, `Gender`, `Daily_Usage_Hours` and the target `Addiction_Level`
@@ -230,12 +250,34 @@ not the arithmetic, and `preprocess(raw)` still reproduces the committed CSV exa
   would be a cycle. Anything all three need goes in `model.py` or `config.py`.
   `inference.py` sits outside that chain entirely: it depends on `Preprocessed.py` and `config.py`
   only, never on `model.py`, which is what keeps the scoring path free of `xgboost`.
-- **`main.py` is the only entry point.** No module under `Src/` has a `main()` or a
-  `if __name__ == "__main__"` block, and `python -m Src.<anything>` does nothing — argument parsing
-  lives in `main.py`'s subparsers and calls library functions (`build_preprocessed_dataset`,
-  `prepare`/`train_models`/`save_artifacts`, `report`, `search`). Add a new runnable step as a
-  subcommand there, not as another module `main()`. `main.py` imports the heavy modules *inside* each
-  command function, so `python main.py preprocess` still works without `xgboost` installed.
+- **`main.py` is the only entry point for the pipeline**, and `App.Api:app` the only one for the
+  service. No module under `Src/` or `App/` has a `main()` or a `if __name__ == "__main__"` block,
+  and `python -m Src.<anything>` does nothing — argument parsing lives in `main.py`'s subparsers and
+  calls library functions (`build_preprocessed_dataset`, `prepare`/`train_models`/`save_artifacts`,
+  `report`, `search`). Add a new runnable step as a subcommand there, not as another module
+  `main()`. `main.py` imports the heavy modules *inside* each command function, so
+  `python main.py preprocess` still works without `xgboost` installed.
+- **`App/` is a transport layer and nothing else.** `Src/inference.Scorer.score` already returns
+  JSON-ready dicts, so the handlers only choose a model, cap the tip count and map exceptions to
+  status codes. Product logic belongs in `Src/`, where `python main.py score` exercises the same
+  path — if a rule, a threshold or a wording change is about to land in `App/`, it is in the wrong
+  file. The three modules split as: `Schemas.py` the wire format (importing `BAND_LABELS`,
+  `DEFAULT_MODEL`, `MAX_TIPS`, `RULES` from `Src.inference` so it cannot drift), `dependencies.py`
+  the `lru_cache`d artifact loading, `Api.py` the routes.
+- **The API's error mapping is deliberate, not incidental.** `ValueError` → **422**: the two checks
+  the wire format cannot make (`Gender` must be a class the stored `LabelEncoder` saw,
+  `School_Grade` must carry a year number) are properties of `models/preprocessor.pkl`, so
+  `Src/Preprocessed.validate_raw` stays their single source of truth and they surface as caller
+  errors. `FileNotFoundError`/`ImportError` → **503**: a missing pickle or an absent `xgboost` is a
+  deployment fault, and the `gb` default may still be serving, so a request for `xgb` must not kill
+  the process. Do not duplicate a `Literal` of the gender classes into `Schemas.py` — it goes stale
+  the next time the preprocessor is refitted.
+- **Artifacts load lazily, per model name.** `App/dependencies.get_scorer` is `lru_cache`d so the
+  pickles are read once per process, and `xgb` is only ever touched if a request asks for it — which
+  is what lets a deployment without `xgboost` still serve the sklearn default. `warm()` runs in the
+  FastAPI `lifespan` so an empty `models/` stops the deployment instead of surfacing as a 500 to a
+  user. Keep `/health` non-raising for the opposite reason: a health check that 500s tells a load
+  balancer nothing it can act on, so it reports `model_loaded: false` instead.
 - **New code takes paths from `Src/config.py`** (`Raw_Data_Path`, `Preprocessed_Data_Path`,
   `Model_Path`, `Preprocessor_Path`, `Model_Artifacts_Path`, `Best_Params_Path`, `Seed`,
   `TEST_SIZE`), which resolves them relative to the repo root. The three
