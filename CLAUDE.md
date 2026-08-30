@@ -46,6 +46,39 @@ reports `{"available": ["rf", "gb"]}` from `/api/models`, and answers 503 for `x
 payoff for `Src/inference.py` never importing it at module scope — do not "fix" it by adding the
 import.
 
+### Netlify hosts the frontend only
+
+**Netlify Functions run JavaScript, TypeScript and Go. They do not run Python**, so `App/` cannot be
+hosted there at any Python version. A build that installs `requirements.txt` there is installing
+*build* tooling and produces no backend even when it succeeds — do not spend time making that
+install pass.
+
+`netlify.toml` therefore sets `base = "frontend"`. That scopes the build to the one directory whose
+manifest is `package.json`, so Netlify never sees the repo-root `requirements.txt` and never
+installs Python at all. It is the fix for the scipy failure as much as it is configuration.
+
+`.python-version` pins **3.13** for any platform that *does* install Python. The failure it prevents:
+Netlify's image defaulted to 3.14, scipy 1.15.2 publishes wheels for cp310–cp313 only, so pip fell
+back to a source build and died looking for `gfortran`. 3.13 is both the highest version with a
+wheel and the interpreter this project is pinned to; 3.12 also works but drifts from the local env.
+
+### Split deployments
+
+When the UI and the API are on different origins — which is every static host — two settings connect
+them, and both are needed:
+
+- **`VITE_API_BASE_URL`** on the frontend build, e.g. `https://your-api.onrender.com`. Read in
+  `frontend/src/lib/api.ts`. Vite **inlines it at build time**, so changing it requires a rebuild,
+  not a restart. Unset means relative `/api` calls — correct for local dev behind the Vite proxy and
+  for FastAPI serving `frontend/dist` itself, and wrong for anything else.
+- **`CORS_ORIGINS`** on the backend, a comma-separated list including the UI's origin. Read in
+  `App/Api.py`; it defaults to the local Vite ports only, so a deployed UI is blocked until it is
+  set.
+
+If the history tab needs to work, the backend also wants a real disk or a hosted database — see the
+read-only note above. A platform with a persistent volume gives SQLite back for free; anything
+serverless needs `DATABASE_URL`.
+
 ## Environment & commands
 
 **Dependencies are split in two, and the split is load-bearing.** `requirements.txt` is the

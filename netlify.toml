@@ -1,0 +1,42 @@
+# Netlify builds and hosts the FRONTEND ONLY.
+#
+# Netlify Functions run JavaScript, TypeScript and Go. They do not run Python,
+# so the FastAPI service in App/ cannot be hosted here at any Python version.
+# The build that failed with a scipy compile error was installing the pipeline's
+# dependencies as *build* tooling and would have produced no backend even if it
+# had succeeded.
+#
+# `base` is the fix as much as the configuration: it scopes the build to
+# frontend/, where the only manifest is package.json. Netlify never sees the
+# repo-root requirements.txt, so it never installs Python, and the scipy failure
+# cannot recur. (The repo-root .python-version pins 3.13 anyway, for any other
+# platform that does install Python - scipy 1.15.2 publishes no wheel for 3.14,
+# which is what forced the source build.)
+#
+# Point the UI at a backend by setting VITE_API_BASE_URL in the Netlify site's
+# environment variables, e.g. https://your-api.onrender.com - see
+# frontend/src/lib/api.ts. Leave it unset and the app calls relative /api paths,
+# which is correct only when one origin serves both (local dev, or FastAPI
+# serving frontend/dist itself).
+
+[build]
+  base = "frontend"
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+# Client-side routing: the app is a single page, so any path that is not a real
+# file must return index.html rather than a 404.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Long-lived caching for Vite's content-hashed assets. index.html is
+# deliberately excluded - it is the file that names the current hashes.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

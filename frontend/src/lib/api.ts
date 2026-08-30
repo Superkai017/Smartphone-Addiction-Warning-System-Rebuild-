@@ -1,10 +1,16 @@
 /**
  * The only place this app talks to the backend.
  *
- * Every path is relative. In development Vite proxies `/api` to the FastAPI
- * process (see `vite.config.ts`); in production FastAPI serves the built bundle
- * from the same origin. Neither case needs a base URL, so there is none to get
- * wrong.
+ * Paths are relative by default. In development Vite proxies `/api` to the
+ * FastAPI process (see `vite.config.ts`); when FastAPI serves the built bundle
+ * itself, the two share an origin. Neither case needs a base URL.
+ *
+ * A *split* deployment does - a static host like Netlify cannot run Python, so
+ * the UI and the API end up on different origins. Set `VITE_API_BASE_URL` at
+ * build time (e.g. `https://your-api.onrender.com`) and every call below is
+ * prefixed with it. It is read at build time, not run time: Vite inlines the
+ * value, so changing it means rebuilding, and the backend must allow the UI's
+ * origin via `CORS_ORIGINS`.
  *
  * The previous frontend imported a TypeScript `scoreSingleRecord` and computed
  * predictions in the browser from hand-written formulas. That module is gone:
@@ -24,6 +30,9 @@ import type {
   RulesResponse,
 } from '../types';
 
+// Trailing slash trimmed so `${API_BASE}/api${path}` never doubles up.
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '');
+
 /** A non-2xx response, carrying the status so a caller can branch on 422 vs 503. */
 export class ApiError extends Error {
   constructor(
@@ -36,7 +45,7 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/api${path}`, {
+  const response = await fetch(`${API_BASE}/api${path}`, {
     headers: { 'Content-Type': 'application/json' },
     ...init,
   });

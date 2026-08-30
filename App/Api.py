@@ -67,6 +67,7 @@ from App.Schemas import (
     HealthResponse,
     HistoryListResponse,
     HistoryRecord,
+    PredictionResult,
     PredictRequest,
     PredictResponse,
 )
@@ -90,7 +91,7 @@ DEV_ORIGINS = [
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI):
     """Load the default scorer and create any missing tables before serving.
 
     Failing on the scorer is intentional - see `App.dependencies.warm`. An empty
@@ -252,7 +253,11 @@ def predict(
             log.exception("failed to write %d prediction(s) to history", len(results))
 
     return PredictResponse(
-        results=results,
+        # `Scorer.score` returns plain dicts and `crud.log_predictions` above
+        # wants them that way, so they are validated into models here rather
+        # than earlier. Pydantic would coerce them either way; doing it
+        # explicitly is what makes the annotation honest.
+        results=[PredictionResult.model_validate(result) for result in results],
         count=len(results),
         model_used=payload.model,
         tips=payload.tips,
