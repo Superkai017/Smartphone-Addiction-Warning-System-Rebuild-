@@ -1,0 +1,83 @@
+# Render hosts the BACKEND ONLY - the FastAPI service in App/.
+#
+# It is the counterpart to netlify.toml, which hosts the frontend only because
+# Netlify Functions run JavaScript, TypeScript and Go and cannot run Python at
+# any version. Together the two files are the split deployment CLAUDE.md
+# describes: two origins, joined by exactly two settings, and both are needed.
+#
+#   - CORS_ORIGINS here must list the Netlify origin, or the browser blocks
+#     every call before it reaches this service.
+#   - VITE_API_BASE_URL on the Netlify build must be this service's URL. Vite
+#     inlines it at build time, so changing it needs a rebuild, not a restart.
+#
+# Deploy: Render dashboard -> New -> Blueprint -> pick this repo. Render reads
+# this file and returns a URL like https://smartphone-addiction-api.onrender.com.
+
+services:
+  - type: web
+    name: smartphone-addiction-api
+    runtime: python
+    plan: free
+    # Oregon is Render's default. Singapore and Frankfurt also exist - moving
+    # closer to your users is the cheapest latency win available here.
+    region: oregon
+
+    # requirements.txt is the RUNTIME set deliberately: no xgboost, no
+    # matplotlib, no Jupyter. Scoring must not drag in a training dependency,
+    # and a deployment bundles what it installs. The consequence is intended,
+    # not a misconfiguration - /api/models reports ["rf", "gb"] and a request
+    # for xgb answers 503, because Src/inference.py never imports xgboost at
+    # module scope. Do not "fix" it by installing requirements-dev.txt here.
+    buildCommand: pip install -r requirements.txt
+
+    # Start as a PACKAGE from the repo root, never as a script. `python
+    # App/Api.py` puts App/ on sys.path[0] instead of the root, and both the
+    # absolute App. and Src. imports fail with ModuleNotFoundError.
+    #
+    # $PORT is injected by Render, and binding 0.0.0.0 rather than 127.0.0.1 is
+    # what makes the container reachable from outside itself. No --reload here:
+    # that is a development flag and it costs a file watcher in production.
+    startCommand: uvicorn App.Api:app --host 0.0.0.0 --port $PORT
+
+    # /api/health is deliberately non-raising - it reports model_loaded: false
+    # rather than 500ing - so it tells Render something it can act on. The app
+    # still refuses to boot at all if models/ is empty, because warm() runs in
+    # the FastAPI lifespan and raises there.
+    healthCheckPath: /api/health
+
+    envVars:
+      # Kept in step with the repo-root .python-version. 3.13 is pinned because
+      # scipy 1.15.2 publishes wheels for cp310-cp313 only; on 3.14 pip falls
+      # back to a source build and dies looking for gfortran.
+      - key: PYTHON_VERSION
+        value: "3.13"
+
+      # Comma-separated origins allowed to call this API, e.g.
+      # https://your-site.netlify.app - no trailing slash, and https matters.
+      # sync: false means Render prompts for the value instead of reading it
+      # from this file, so the frontend's address is not hardcoded in the repo.
+      # Left unset, App/Api.py falls back to the local Vite ports and a deployed
+      # UI is blocked by CORS.
+      - key: CORS_ORIGINS
+        sync: false
+
+    # History persistence, and the one honest caveat of the free plan.
+    #
+    # Render's filesystem is writable, so app.db is created on first boot and
+    # /api/history works - unlike a serverless host, where it answers 503. But
+    # on the free plan that disk is EPHEMERAL: every deploy, and every restart
+    # after the instance spins down, starts from an empty database. Scoring is
+    # unaffected; only the history tab forgets.
+    #
+    # For history that survives a deploy, either attach a disk (paid plans only)
+    #
+    #   disk:
+    #     name: data
+    #     mountPath: /var/data
+    #     sizeGB: 1
+    #
+    #   and set DATABASE_URL to sqlite:////var/data/app.db - four slashes, three
+    #   for the scheme and one for the absolute path - or point DATABASE_URL at
+    #   a hosted Postgres instead. App/database.py reads that env var and
+    #   applies the SQLite-only connect_args conditionally, so either works with
+    #   no code change.
