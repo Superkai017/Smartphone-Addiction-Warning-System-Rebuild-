@@ -35,6 +35,15 @@ Error mapping, and why each one:
 * A failed *write* is *not* mapped to an error at all. History is a
   convenience; if SQLite is unavailable the prediction is still correct and is
   still returned, with an empty `history_ids`. See `predict`.
+* A failed history *read* -> **503**, via `_storage_unavailable`. A read has no
+  useful degraded answer - an empty list would claim the history is empty when
+  it is really unreachable - so it says so instead. This is the same class of
+  fault as a missing pickle, and gets the same status.
+
+A deployment on a read-only filesystem (a serverless function, say) therefore
+serves `/api/health`, `/api/models`, `/api/rules` and `/api/predict` normally,
+and answers 503 on `/api/history` until `DATABASE_URL` points somewhere
+writable. That path is exercised by the read-only test in the scratchpad notes.
 """
 
 from __future__ import annotations
@@ -254,7 +263,31 @@ def predict(
 # --------------------------------------------------------------------------- #
 # History
 # --------------------------------------------------------------------------- #
-@app.get("/api/history", response_model=HistoryListResponse, tags=["history"])
+def _storage_unavailable(exc: SQLAlchemyError) -> HTTPException:
+    """Turn a database failure on a read path into a 503 with a usable message.
+
+    Unlike a write, a read has no sensible degraded answer: returning an empty
+    list would tell the caller the history *is* empty rather than unreachable,
+    and a UI would render "no saved predictions" over a database that is merely
+    misconfigured. 503 is the same status a missing artifact gets, for the same
+    reason - it is a deployment fault, not a caller error.
+    """
+    log.exception("history storage unavailable")
+    return HTTPException(
+        status_code=503,
+        detail=(
+            "History storage is unavailable. On a read-only filesystem set "
+            f"DATABASE_URL to a writable database. ({type(exc).__name__})"
+        ),
+    )
+
+
+@app.get(
+    "/api/history",
+    response_model=HistoryListResponse,
+    responses={503: {"model": ErrorResponse}},
+    tags=["history"],
+)
 def list_history(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
@@ -263,9 +296,12 @@ def list_history(
     db: Session = Depends(get_db),
 ) -> HistoryListResponse:
     """Past runs, newest first. `total` ignores paging so a UI can show 'x of y'."""
-    rows, total = crud.list_predictions(
-        db, limit=limit, offset=offset, band=band, model_name=model_name
-    )
+    try:
+        rows, total = crud.list_predictions(
+            db, limit=limit, offset=offset, band=band, model_name=model_name
+        )
+    except SQLAlchemyError as exc:
+        raise _storage_unavailable(exc) from exc
     return HistoryListResponse(
         items=[HistoryRecord.from_row(row) for row in rows],
         total=total,
@@ -277,7 +313,7 @@ def list_history(
 @app.get(
     "/api/history/{record_id}",
     response_model=HistoryRecord,
-    responses={404: {"model": ErrorResponse}},
+    responses={404: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
     tags=["history"],
 )
 def get_history(record_id: int, db: Session = Depends(get_db)) -> HistoryRecord:
@@ -286,7 +322,10 @@ def get_history(record_id: int, db: Session = Depends(get_db)) -> HistoryRecord:
     Its `record` field is a valid `/api/predict` payload - that is what the
     frontend's "load into form" button posts back.
     """
-    row = crud.get_prediction(db, record_id)
+    try:
+        row = crud.get_prediction(db, record_id)
+    except SQLAlchemyError as exc:
+        raise _storage_unavailable(exc) from exc
     if row is None:
         raise HTTPException(status_code=404, detail=f"no history record {record_id}")
     return HistoryRecord.from_row(row)
@@ -295,7 +334,7 @@ def get_history(record_id: int, db: Session = Depends(get_db)) -> HistoryRecord:
 @app.delete(
     "/api/history/{record_id}",
     response_model=DeleteResponse,
-    responses={404: {"model": ErrorResponse}},
+    responses={404: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
     tags=["history"],
 )
 def delete_history(record_id: int, db: Session = Depends(get_db)) -> DeleteResponse:
@@ -304,12 +343,21 @@ def delete_history(record_id: int, db: Session = Depends(get_db)) -> DeleteRespo
     A missing id is a 404 rather than a silent success, so a UI that deletes the
     same row twice learns the second one was already gone.
     """
-    if not crud.delete_prediction(db, record_id):
+    try:
+        deleted = crud.delete_prediction(db, record_id)
+    except SQLAlchemyError as exc:
+        raise _storage_unavailable(exc) from exc
+    if not deleted:
         raise HTTPException(status_code=404, detail=f"no history record {record_id}")
     return DeleteResponse(deleted=1, id=record_id)
 
 
-@app.delete("/api/history", response_model=DeleteResponse, tags=["history"])
+@app.delete(
+    "/api/history",
+    response_model=DeleteResponse,
+    responses={503: {"model": ErrorResponse}},
+    tags=["history"],
+)
 def clear_history(
     confirm: bool = Query(
         default=False,
@@ -322,7 +370,10 @@ def clear_history(
         raise HTTPException(
             status_code=400, detail="pass ?confirm=true to clear history"
         )
-    return DeleteResponse(deleted=crud.clear_predictions(db))
+    try:
+        return DeleteResponse(deleted=crud.clear_predictions(db))
+    except SQLAlchemyError as exc:
+        raise _storage_unavailable(exc) from exc
 
 
 # --------------------------------------------------------------------------- #

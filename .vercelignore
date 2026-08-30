@@ -1,0 +1,35 @@
+# The FastAPI app becomes one function bundle, so anything here that is not
+# needed to serve a request is dead weight in it. Serving needs Src/, App/,
+# models/ and frontend/dist - nothing else in the repo.
+
+# Notebooks and their committed outputs. Nothing at runtime imports them.
+notebook/
+
+# The training data. `Src/inference.py` reads models/thresholds.json for its
+# calibration, never the CSVs, so neither the 3,000-row raw set nor the
+# preprocessed copy is needed to score.
+data/
+
+# Local environments and build inputs.
+.venv/
+frontend/node_modules/
+frontend/src/
+frontend/package.json
+frontend/package-lock.json
+frontend/tsconfig.json
+frontend/vite.config.ts
+frontend/index.html
+scripts/
+
+# Docs and dev-only pins.
+*.md
+!README.md
+requirements-dev.txt
+feature-engineer.txt
+loop.md
+
+# Local SQLite. See the deployment note in CLAUDE.md: a Vercel function has a
+# read-only filesystem, so this file cannot be written there and history is a
+# no-op unless DATABASE_URL points at a hosted database.
+app.db
+app.db-*

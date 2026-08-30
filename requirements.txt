@@ -1,5 +1,6 @@
-# Pinned to the versions this project is known to run on: Python 3.13.9,
-# the interpreter the `venv` Jupyter kernel actually points at.
+# Runtime dependencies: what scoring a record and serving it over HTTP needs.
+# Pinned to the versions this project is known to run on (Python 3.13.9, the
+# interpreter the `venv` Jupyter kernel actually points at).
 #
 #     python -m venv .venv
 #     .venv/Scripts/activate          # Windows;  source .venv/bin/activate on Linux/macOS
@@ -8,6 +9,13 @@
 # NOTE: `python` on PATH may be a different interpreter with none of this
 # installed - check `python -c "import sys; print(sys.executable)"` before
 # blaming the code for a ModuleNotFoundError.
+#
+# **Training and the notebooks need `requirements-dev.txt` instead**, which
+# installs this file plus xgboost, matplotlib, seaborn and Jupyter. The split is
+# not cosmetic: a deployment installs *this* list into a size-capped function
+# bundle, and the dev extras are ~230MB of it. It also matches the rule
+# `Src/__init__.py` already follows - scoring must not drag in a training
+# dependency.
 
 # --- pipeline ---------------------------------------------------------------
 pandas==2.2.3
@@ -15,19 +23,9 @@ numpy==2.2.4
 scikit-learn==1.6.1
 scipy==1.15.2            # pulled in by scikit-learn; used directly in modelling.ipynb
 joblib==1.4.2            # artifact (de)serialisation in Src/Preprocessed.py and Src/model.py
-xgboost==3.1.2
-
-# --- notebooks --------------------------------------------------------------
-matplotlib==3.10.1
-seaborn==0.13.2
-jupyterlab==4.4.3
-notebook==7.4.3
-ipykernel==6.29.5
 
 # --- api --------------------------------------------------------------------
-# Previously installed in .venv but unpinned here, so a fresh clone could run
-# the pipeline and not the service. sqlalchemy backs the prediction-history
-# table in app.db (App/database.py).
+# sqlalchemy backs the prediction-history table in app.db (App/database.py).
 fastapi==0.141.1
 uvicorn==0.52.4
 pydantic==2.13.5

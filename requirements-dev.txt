@@ -1,0 +1,24 @@
+# Everything in requirements.txt, plus what training and the notebooks need.
+# This is the file to install for local work:
+#
+#     pip install -r requirements-dev.txt
+#
+# `python main.py train`, `tune` and `evaluate` all import xgboost through
+# Src/model.py, and the three notebooks need matplotlib/seaborn/Jupyter. None of
+# it is needed to *serve* a prediction, which is why it is not in
+# requirements.txt - see the note there.
+
+-r requirements.txt
+
+# --- training ---------------------------------------------------------------
+# ~110MB installed. `Src/inference.py` loads estimators through joblib by name
+# rather than importing xgboost, so a deployment without this still serves the
+# `gb` default and answers 503 for `xgb`.
+xgboost==3.1.2
+
+# --- notebooks --------------------------------------------------------------
+matplotlib==3.10.1
+seaborn==0.13.2
+jupyterlab==4.4.3
+notebook==7.4.3
+ipykernel==6.29.5

@@ -8,7 +8,7 @@ import {
   Loader2,
   Inbox,
 } from 'lucide-react';
-import { clearHistory, deleteHistoryRecord, listHistory } from '../lib/api';
+import { ApiError, clearHistory, deleteHistoryRecord, listHistory } from '../lib/api';
 import { BAND_ORDER, bandClass } from '../lib/catalog';
 import type { HistoryRecord, ModelType, RawRecord, SeverityBand } from '../types';
 
@@ -66,8 +66,16 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
       setItems(page.items);
       setTotal(page.total);
       setError(null);
-    } catch {
-      setError('Could not load history. Is the API running?');
+    } catch (err) {
+      // The API answers 503 with a specific reason when its storage is
+      // unreachable - a read-only filesystem, say. Show that rather than
+      // guessing, and never render an empty table over a database that is
+      // merely misconfigured.
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : 'Could not reach the API. Is the backend running on :8000?',
+      );
       setItems([]);
       setTotal(0);
     } finally {

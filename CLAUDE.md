@@ -20,11 +20,50 @@ it. Tests and packaging are the next unstarted milestones.**
 register. It is more current than this file — read it before planning work, and update it when you
 close a risk.
 
+## Deployment
+
+`pyproject.toml` carries `[tool.vercel] entrypoint = "App.Api:app"`. Without it the build fails with
+*"Found main.py but it does not define a top-level app FastAPI instance"* — `main.py` is one of the
+filenames Vercel auto-detects, but it is the CLI entry point and has no ASGI app. Note the capital
+`A` in `App.Api`: builds run on Linux, where `app/` and `App/` are not the same directory.
+
+**A serverless deployment has a read-only filesystem, so `app.db` cannot be written there.** The
+service is built to survive that rather than to pretend otherwise:
+
+- `init_db` failing is caught in the `lifespan` and logged; the process still starts.
+- `/api/predict` still scores, and returns an empty `history_ids`.
+- `/api/history` answers **503 with the reason**, not an empty list — an empty list would claim the
+  history *is* empty when it is only unreachable, and the UI would render "no saved predictions"
+  over a misconfigured database.
+
+So predictions work and history does not, until `DATABASE_URL` points at a hosted database
+(the env var is read in `App/database.py` and works for any SQLAlchemy URL). If persistent history
+matters, either set that or deploy somewhere with a real disk. `.vercelignore` keeps the notebooks,
+the CSVs and the frontend sources out of the function bundle.
+
+`xgboost` is deliberately absent from the runtime set, so a deployment serves the `gb` default,
+reports `{"available": ["rf", "gb"]}` from `/api/models`, and answers 503 for `xgb`. That is the
+payoff for `Src/inference.py` never importing it at module scope — do not "fix" it by adding the
+import.
+
 ## Environment & commands
 
-`requirements.txt` pins every dependency to the versions this project is known to run on
-(Python 3.13.9, pandas 2.2.3, scikit-learn 1.6.1, xgboost 3.1.2). `.venv/` is the project
-environment and is gitignored.
+**Dependencies are split in two, and the split is load-bearing.** `requirements.txt` is the
+*runtime* set - pandas, numpy, scikit-learn, scipy, joblib, fastapi, uvicorn, pydantic, sqlalchemy -
+which is everything needed to score a record and serve it. `requirements-dev.txt` installs that
+plus xgboost, matplotlib, seaborn and Jupyter, and **is what you want locally**: `main.py train`,
+`tune` and `evaluate` all import xgboost through `Src/model.py`, and the notebooks need the rest.
+
+    pip install -r requirements-dev.txt      # local work
+    pip install -r requirements.txt          # a deployment
+
+The dev extras are ~230MB of a ~520MB tree, and a deployment bundles what it installs, so the split
+is not tidiness. It also matches a rule this file already states: scoring must not drag in a
+training dependency. `pyproject.toml` mirrors `requirements.txt` under `[project] dependencies`
+with the dev set as the `dev` extra - keep the three in step.
+
+Versions are pinned to what this project is known to run on (Python 3.13.9, pandas 2.2.3,
+scikit-learn 1.6.1, xgboost 3.1.2). `.venv/` is the project environment and is gitignored.
 
 **`python` on PATH is not the right interpreter.** It is a bare 3.10.0rc2 with *nothing* installed —
 no pandas, no joblib, no sklearn — so running anything through it fails with `ModuleNotFoundError`.
